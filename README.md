@@ -48,3 +48,35 @@ For privacy reasons, the policy PDF is not included in this repository.
 
 1. Place your insurance policy PDF in:
 
+> data/documents/
+
+2. Run the notebooks in order:
+- `01_document_ingestion.ipynb`
+- `02_embeddings_and_indexing.ipynb`
+- `03_rag_question_answering.ipynb`
+3. Ask questions related to coverage, eligibility, exclusions, and benefits.
+
+## Example Questions
+
+- Is physiotherapy covered?
+- What is the annual maximum for prescription drugs?
+- Are pre-authorizations required?
+- What expenses are excluded?
+
+## Responsible AI Considerations
+
+- Answers are grounded in retrieved document content
+- The system returns "I don't know" when information is absent
+- Citations are included to support transparency
+- Scope and limitations are clearly defined
+
+## Future Extensions
+
+- User-uploaded policy documents
+- Multi-document support (policy + amendments)
+- Simple web UI
+- Query logging and evaluation metrics
+
+---
+
+*This project is intended as a technical demonstration of RAG principles and responsible AI design.*
