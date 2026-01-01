@@ -14,3 +14,6 @@ data/documents/*.pdf
 
 # --- Vector DB / embeddings storage ---
 chroma/
+
+# ---DS_Store ---
+.DS_Store
