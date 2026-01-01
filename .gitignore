@@ -1,0 +1,16 @@
+# --- Secrets ---
+.env
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Data (do not commit private PDFs) ---
+data/documents/*.pdf
+
+# --- Vector DB / embeddings storage ---
+chroma/
