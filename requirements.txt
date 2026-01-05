@@ -3,6 +3,8 @@ langchain==0.1.16
 langchain-community==0.0.34
 chromadb==0.4.24
 pypdf==4.2.0
-langchain-google-genai
+tiktoken==0.7.0
+openai==1.14.3
+langchain-google-genai==1.0.5
 
 
