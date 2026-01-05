@@ -1,10 +1,24 @@
+# Core numerical dependency (required for Chroma compatibility)
 numpy==1.26.4
+
+# LangChain stack (aligned versions)
 langchain==0.1.16
 langchain-community==0.0.34
+
+# Vector database
 chromadb==0.4.24
+
+# PDF parsing
 pypdf==4.2.0
+
+# Token utilities
 tiktoken==0.7.0
+
+# OpenAI-compatible client (used for Gemini API)
 openai==1.14.3
-langchain-google-genai==1.0.5
+
+# Gemini embeddings (compatible with LangChain 0.1.x)
+langchain-google-genai==0.0.9
+
 
 
