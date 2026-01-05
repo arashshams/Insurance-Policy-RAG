@@ -16,7 +16,6 @@ tiktoken==0.7.0
 
 # OpenAI-compatible client (used for Gemini API)
 openai==1.14.3
-httpx==0.26.1
 
 # Gemini embeddings (compatible with LangChain 0.1.x)
 langchain-google-genai==0.0.9
