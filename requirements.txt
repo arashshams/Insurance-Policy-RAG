@@ -1,0 +1,24 @@
+# Runtime dependencies for the Insurance-Policy-RAG notebooks.
+# The pipeline uses pypdf for extraction, the OpenAI client against the
+# Gemini API for embeddings/generation, and ChromaDB for vector storage.
+
+# Core numerical dependency (required for Chroma compatibility)
+numpy==1.26.4
+
+# PDF parsing (notebook 01 - document ingestion)
+pypdf==4.2.0
+
+# Token-aware chunking (notebook 01): tiktoken for token counts and the
+# standalone recursive splitter (no full langchain / langchain-core needed)
+tiktoken==0.7.0
+langchain-text-splitters==0.2.4
+
+# OpenAI-compatible client, used against the Gemini API
+# (embeddings in notebook 02, generation in notebook 03)
+openai==1.14.3
+
+# Vector database (notebooks 02 and 03)
+chromadb==0.4.24
+
+# Progress bars for batched embedding
+tqdm==4.66.4

@@ -1,4 +1,9 @@
 # Insurance-Policy-RAG
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](
+https://colab.research.google.com/github/arashshams/Insurance-Policy-RAG/blob/new_dev/notebooks/03_insurance_policy_rag.ipynb
+)
+
 # Insurance Policy RAG Assistant
 
 This project demonstrates how Retrieval-Augmented Generation (RAG) can be used to help interpret complex insurance policy documents by providing clear, document-grounded answers with citations.

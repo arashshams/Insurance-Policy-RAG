@@ -6,7 +6,7 @@ __pycache__/
 *.pyc
 *.pyo
 
-# --- Jupyter ---
+# --- Jupyter / Colab ---
 .ipynb_checkpoints/
 
 # --- Data (do not commit private PDFs) ---
@@ -15,5 +15,9 @@ data/documents/*.pdf
 # --- Vector DB / embeddings storage ---
 chroma/
 
-# ---DS_Store ---
+# --- Intermediate pipeline outputs (chunks.json, etc.) ---
+artifacts/
+
+# --- OS / editor cruft ---
 .DS_Store
+Thumbs.db
