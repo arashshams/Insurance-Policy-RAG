@@ -1,0 +1,14 @@
+# WorkSafeBC Case Study - Q3d Raw Data Export: Low Slope Roofing (721036) duration metrics
+# Source: WorkSafeBC public Power BI 'Provincial Overview (past 10 years)', Injury Management tab, Report 3079. Data as of 2026-06-30.
+# 'Average Complete Duration' = mean days of complete claims; '% High Duration Claims' from the built-in dashboard series.
+# % Serious Injury Claims repeated here from Injury Rate tab for the Q3d comparison.
+metric,2016,2017,2018,2019,2020,2021,2022,2023,2024,2025
+% High Duration Claims,28.0,18.2,19.0,21.2,23.9,23.0,23.0,26.4,23.8,31.5
+Average Complete Duration (days),69.7,46.4,49.8,54.5,76.5,80.8,66.3,74.2,104.9,94.5
+% Serious Injury Claims,21,13,18,20,17,17,21,22,16,18
+# RTW (<= 4 Weeks),102,125,126,80,68,97,85,88,81,88
+# RTW (<= 12 Weeks),138,162,165,111,94,130,110,120,106,118
+# RTW (<= 26 Weeks),163,182,189,138,108,149,133,142,121,129
+# RTW (26+ Weeks),8,12,15,7,11,12,13,14,9,14
+Overall RTW,171,194,204,145,119,161,146,156,130,143
+NRTW (not returned to work),29,26,19,19,23,13,11,15,17,17
