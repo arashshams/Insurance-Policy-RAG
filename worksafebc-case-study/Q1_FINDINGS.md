@@ -77,3 +77,18 @@ subsectors (e.g. Warehousing ~4.67, Forestry ~4.13) barely move the provincial n
   these notes. All numbers are candidate-verifiable against the cited dashboard.
 - Judgment calls made WITH the candidate: 5-year window = 2019-2023; contribution
   anchored to official 2.08; report the 10% result honestly incl. the thin margin.
+
+
+## Assumptions & Disclaimers (Q1)
+
+**5-year window = 2019-2023.** Chosen as the last five completed injury years, consistent with the "2.08 as of 2023" and "below 2.0 by 2024" framing. A 2021-2025 re-run is available via the WIN flag in q1_subsector_contribution.py.
+
+**Contribution anchored to the official 2.08.** Summing the 24 individually-filtered subsectors overshoots the province rollup (~10.5% on claims, ~12.8% on person-years for 2023; implied pooled rate 2.04 vs official 2.08). The contribution table is therefore built on each subsector's SHARE of time-loss claims multiplied by the official 2.08, not on the raw subsector sum. The rollup gap is disclosed, not hidden; relative shares are robust to within ~2%.
+
+**Injury-rate definition:** time-loss claims per 100 person-years (verified: 53,702 / 2,579,485 x 100 = 2.082, matches published 2.08).
+
+**Selection is by contribution to the provincial rate, not injury rate alone** (per the question); this is why Tourism (7610) makes the top 3 on size despite a below-average own rate.
+
+**Intervention math is linear/proportional:** a 10% cut to each top-3 subsector's rate is assumed to remove ~10% of its claims (new provincial rate = 2.08 x (1 - 0.418 x 0.10) = ~1.995). The ~9.4% cut needed to hit exactly 2.0 means the 10% target clears < 2.0 with almost no margin (fragile) - see part (b).
+
+**AI attribution:** data extraction, Python analysis, contribution table and intervention math drafted with AI assistance (Claude); all figures candidate-verifiable against the cited dashboard.
