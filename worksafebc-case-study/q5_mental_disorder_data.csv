@@ -1,0 +1,30 @@
+# Q5 - Mental Disorder Claims: Frequency vs Cost (Province-wide, ratable sectors)
+# Sources: (F) = Mental Disorder Claims dashboard (Report 3841, data as of 2026-07-06), allowed/reported-in-year counts;
+#          (C) = Industry Claim Cost Drivers dashboard (Report 3559, data as of 2026-06-30), paid-in-year $ and paid-claim counts.
+# NOTE: 'Allowed' (F) counts claims newly accepted in the year; 'PaidClaims' (C) counts all claims receiving any payment in the year (includes prior-year claims). The two counts are NOT directly comparable - see Assumptions.
+
+metric,claim_type,2016,2017,2021,2022,2023,2024,2025,source
+reported_claims,psychological_only,,,5442,5882,6757,7243,8053,F
+allowed_claims,psychological_only,,,1736,1973,2187,2414,2607,F
+disallowed_claims,psychological_only,,,1462,1511,2013,2578,3127,F
+allow_rate,psychological_only,,,54%,57%,52%,48%,45%,F
+allowed_claims,physical_with_psychological,,,913,986,988,1128,1119,F
+claim_cost_paid_$M,psychological_only,180.2,,271.2,385.0,379.9,,439.9,C
+paid_claim_count,psychological_only,,,9656,,,,11823,C
+claim_cost_paid_$M,physical_with_psychological,303.3,301.8,414.7,,502.4,,547.1,C
+paid_claim_count,physical_with_psychological,,,76277,,,,72400,C
+
+# Derived (computed outside dashboard)
+derived_metric,value,note
+psych_only_allowed_growth_2021_2025,+50.2%,1736 -> 2607
+combined_allowed_growth_2021_2025,+22.6%,913 -> 1119
+psych_only_reported_growth_2021_2025,+48.0%,5442 -> 8053
+psych_only_cost_growth_2016_2025,+144.1%,180.2M -> 439.9M
+psych_only_cost_growth_2021_2025,+62.2%,271.2M -> 439.9M
+combined_cost_growth_2016_2025,+80.4%,303.3M -> 547.1M
+combined_cost_growth_2021_2025,+31.9%,414.7M -> 547.1M
+total_mental_disorder_cost_2025,~987.0M,psych-only 439.9M + combined 547.1M
+combined_share_of_MD_cost_2025,55.4%,combined costs more in total despite fewer allowed claims
+combined_share_of_allowed_MD_claims_2025,30.0%,1119 of 3726 allowed MD claims
+cost_per_paid_claim_psych_only_2025,~$37207,439.9M / 11823 (paid-claim denominator)
+cost_per_paid_claim_combined_2025,~$7557,547.1M / 72400 (paid-claim denominator - large active population)
