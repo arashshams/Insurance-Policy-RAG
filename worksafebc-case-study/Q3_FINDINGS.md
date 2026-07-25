@@ -78,3 +78,18 @@ one-line `WIN` constant so the whole thing can be re-run on 2021–2025.
   candidate before submission.
 - **Narrative:** AI drafted this findings summary; interpretation and framing to be reviewed and
   adopted (or edited) by the candidate, who owns the final submission.
+
+
+## Assumptions & Disclaimers (Q3)
+
+**5-year window (Q3c) = 2019-2023.** Treated as the last five completed years to stay faithful to the apparent 2023-vintage assignment; the analysis script exposes a one-line WIN constant to re-run on 2021-2025.
+
+**"Rest-of-7210" defined by subtraction.** "All other CUs in 7210" = subsector total minus Steep Slope, derived from serious-injury claim counts and person-years rather than summing ~50 CUs individually. This is exact for rates (it works from counts and person-years) and the derived Steep Slope SIR reproduces the published series.
+
+**Q3b method pairing.** OLS linear regression (trend/interpretability) is paired with Byar-approximation Poisson rate CIs (correct for the small annual SI counts, 33-58/yr for Steep Slope). Both are included per the question; the Poisson CIs are wide and overlapping, so single-year moves for Steep Slope are largely small-sample noise - lean on the multi-year trend.
+
+**Q3d "high-duration" definition.** Uses the dashboard's built-in "% High Duration Claims" series (Injury Management tab) rather than a custom return-to-work threshold; RTW buckets are retained in the CSV if a custom cut (e.g. % still off at 26+ weeks) is preferred.
+
+**Small-lever caveat (Q3c).** Each roofing CU is <3% of the subsector's serious-injury claims, so a 20% SIR cut on either moves the 7210-level SIR only slightly (Steep Slope has the larger impact); the lever is much larger within roofing itself.
+
+**AI attribution:** dashboard extraction ("Show as a table"), and all statistics in q3_roofing_analysis.py (descriptive stats, OLS, Byar Poisson CIs, impact decomposition, Pearson correlation) produced with AI assistance (Claude); figures should be spot-checked by the candidate before submission.
