@@ -41,7 +41,7 @@ Working scratch/draft for the Senior Analytics Specialist take-home. STATUS: all
 - PROGRESS_HANDOFF.md (this file)
 
 ## Q6 confirmed answer key (quick reference)
-1: Significant / reject null | 2: Rows where age > 30 | 3: 4 | 4: Affects both IV and DV | 5: Overfitting |
+1: Significant / reject null | 2: Rows where age > 30 | 3: 2, 4, 6 | 4: Affects both IV and DV | 5: Overfitting |
 6: Recall up, precision down | 7: Number of clients served | 8: Employer C (23.1%) | 9: Estimate performance on unseen data | 10: Wide range of distinct values (high cardinality)
 
 ## Data sources (Power BI dashboards, all public)
