@@ -56,3 +56,18 @@ The linear model under-predicts all three because the multi-year decline flatten
 
 ## Data note / reconciliation
 Category counts were read from chart labels; the four categories sum exactly to the annual total in 8 of 10 years (2015 and 2020 differ by 1-2 due to label-read tolerance). Annual totals are authoritative.
+
+
+## Assumptions & Disclaimers (Q2)
+
+**Scope split.** KPI trends/forecasts use General Construction subsector 7210; work-related deaths use the broader Construction sector 72 - deliberately, because fatalities are rare events and sector-72 counts are more stable/less volatile than 7210.
+
+**Windows.** "Last 10 years" for KPIs = 2016-2025; deaths = 2015-2024 (as the dashboards expose them). The exam is treated as 2023-vintage, so the forecast target is 2024 with training on <=2023; the script exposes a re-run flag for an alternate window.
+
+**Coding-lag caveat (assignment hint).** SI and MSI claims carry a ~7-month coding lag, so the most recent year's SIR/MSIR are understated at first publication and revise upward. 2024/2025 figures are treated as provisional; a naive same-year forecast off provisional counts risks over-stating the decline.
+
+**Forecast method choice.** A simple OLS linear trend was chosen for transparency and defensibility on a ~10-point annual series; this is a judgment call (alternatives such as Poisson/neg-binomial with a person-years offset, piecewise trend, or exponential weighting are listed under "how to improve the forecast").
+
+**Death-category reconciliation.** The four death categories were read from chart labels and sum exactly to the annual total in 8 of 10 years; 2015 and 2020 differ by 1-2 due to label-read tolerance. Annual totals are authoritative.
+
+**AI attribution:** dashboard extraction, OLS/correlation/back-test statistics, and forecast-improvement recommendations produced with AI assistance (Claude); code committed for reproducibility and candidate review.
