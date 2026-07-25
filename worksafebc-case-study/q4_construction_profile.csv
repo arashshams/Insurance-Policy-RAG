@@ -1,0 +1,53 @@
+section,metric,category,value,unit,window,notes
+CU_Profile,Injury Rate,,4.15->2.98,per 100 PY,2016-2025,7210 subsector; -28.2%
+CU_Profile,Person Years,,159704->213005,count,2016-2025,+33% exposure growth
+CU_Profile,Serious Injury Rate,,0.87->0.58,per 100 PY,2016-2025,-33%
+CU_Profile,STD/LTD/Fatal Claims,,6818->6806,count/yr,2016-2025,peak 7611 (2018)
+CU_Profile,Serious Injury Claims,,1386->1235,count/yr,2016-2025,
+CU_Profile,Inspection Reports,,20965,count,2025,~21K/yr
+CU_Profile,Orders,,15689,count,2025,
+CU_Profile,Net Penalties Imposed,,291,count,2025,
+CU_Profile,Warning Letters Sent,,389,count,2025,
+CU_Profile,Long-recovery sprains share,,29%->35%,percent,2016-2025,worsening recovery
+Costs,Total Claim Costs Paid,,157.28M->261.74M,CAD,2016-2025,7210
+Costs,Total Work Days Lost,,321687->373464,days,2016-2025,7210
+BenefitMix,LTD,,35.15,percent,2016-2025,7210; province more STD-weighted
+BenefitMix,Health Care,,28.41,percent,2016-2025,7210
+BenefitMix,STD,,24.66,percent,2016-2025,7210
+BenefitMix,Other,,11.78,percent,2016-2025,7210
+HealthCareByProgram,Hospitals,,119.3M,CAD,2016-2025,7210 top program
+HealthCareByProgram,Physicians,,95.2M,CAD,2016-2025,7210
+HealthCareByProgram,Physiotherapy,,61.9M,CAD,2016-2025,7210
+HealthCareByProgram,Home Care Services,,39.7M,CAD,2016-2025,7210
+HealthCareByProgram,Hearing Aid Providers,,21.9M,CAD,2016-2025,7210
+HealthCareByProgram,Drugs & Pharmacies,,19.9M,CAD,2016-2025,7210
+AccidentType_Cost,Fall from Elevation,cost,28.0,percent,2021-2025,7210 SLF cost share
+AccidentType_Cost,Overexertion,cost,15.6,percent,2021-2025,
+AccidentType_Cost,Struck By,cost,13.3,percent,2021-2025,
+AccidentType_Cost,Fall on Same Level,cost,7.6,percent,2021-2025,
+AccidentType_Cost,MVI,cost,4.4,percent,2021-2025,
+AccidentType_Freq,Overexertion,freq,23.7,percent,2021-2025,7210 SLF count share
+AccidentType_Freq,Struck By,freq,19.2,percent,2021-2025,
+AccidentType_Freq,Fall from Elevation,freq,15.7,percent,2021-2025,
+AccidentType_Freq,Fall on Same Level,freq,8.7,percent,2021-2025,
+AccidentType_Freq,Struck Against,freq,6.5,percent,2021-2025,
+SeverityIndex,Fall from Elevation,,1.78,cost%/freq%,2021-2025,high freq AND high severity
+SeverityIndex,MVI,,1.91,cost%/freq%,2021-2025,highest severity but low freq
+SeverityIndex,Overexertion,,0.66,cost%/freq%,2021-2025,high freq low severity
+SeverityIndex,Struck By,,0.69,cost%/freq%,2021-2025,
+NatureOfInjury_Cost,Fractures,cost,29.6,percent,2021-2025,severity index 2.67
+NatureOfInjury_Cost,Other Strains,cost,24.3,percent,2021-2025,
+NatureOfInjury_Cost,Back Strain,cost,8.9,percent,2021-2025,
+NatureOfInjury_Freq,Other Strains,freq,31.7,percent,2021-2025,
+NatureOfInjury_Freq,Back Strain,freq,16.9,percent,2021-2025,
+NatureOfInjury_Freq,Laceration,freq,15.6,percent,2021-2025,
+NatureOfInjury_Freq,Fractures,freq,11.1,percent,2021-2025,
+BodyPart_Freq,Wrist Fingers and Hand,freq,22.3,percent,2021-2025,
+BodyPart_Freq,Back,freq,17.8,percent,2021-2025,
+Occupation_Freq,Construction trades helpers and labourers,freq,19.3,percent,2021-2025,
+Occupation_Freq,Carpenters,freq,19.3,percent,2021-2025,
+Occupation_Cost,Construction trades helpers and labourers,cost,15.1,percent,2021-2025,
+Occupation_Cost,Carpenters,cost,15.1,percent,2021-2025,
+SourceOfInjury_Cost,Floors Walkways Ground,cost,29.4,percent,2021-2025,
+SourceOfInjury_Freq,Floors Walkways Ground,freq,19.5,percent,2021-2025,
+AgeGroup_Cost,Workers 25-54,cost,70,percent,2021-2025,~$815M of $1.164B
