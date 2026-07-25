@@ -7,7 +7,8 @@ reasoning is included so the choices can be defended.
 |---|--------------------|--------|-----|
 | 1 | A p-value of 0.03 (alpha = 0.05) means... | Statistically significant - reject the null hypothesis | 0.03 < 0.05 falls in the rejection region. (It is NOT 'a 3% chance the null is true'.) |
 | 2 | What does `df[df['age'] > 30]` return in pandas? | All rows where age > 30 | Boolean-mask row filter; returns the subset of rows (all columns) meeting the condition. |
-| 3 | What does `np.array([1, 2, 3]) * 2` return? | [2, 4, 6] | Element-wise scalar multiply (broadcasting): each element x 2 -> [2, 4, 6]. (Not list repetition; that would be a Python list, not a numpy array.) || 4 | What is a confounder? | A variable that affects BOTH the independent and dependent variables, distorting the relationship | Defining property of confounding. |
+| 3 | What does `np.array([1, 2, 3]) * 2` return? | [2, 4, 6] | Element-wise scalar multiply (broadcasting): each element x 2 -> [2, 4, 6]. (Not list repetition; that would be a Python list, not a numpy array.) |
+| 4 | What is a confounder? | A variable that affects BOTH the independent and dependent variables, distorting the relationship | Defining property of confounding. |
 | 5 | A model with high variance is... | Overfitting | Fits training noise too closely; generalizes poorly. |
 | 6 | Lowering logistic threshold 0.5 -> 0.2 | Recall increases, precision decreases | More positives flagged -> more true positives (higher recall) but more false positives (lower precision). |
 | 7 | Which is NOT a quality or efficiency measure? | Number of clients served | A volume/output count, not quality or efficiency. |
