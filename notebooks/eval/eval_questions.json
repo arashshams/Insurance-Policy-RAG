@@ -4,11 +4,11 @@
   "in_scope": [
     {
       "id": "in_01",
-      "question": "Is physiotherapy covered?",
+      "question": "Is physiotherapy covered under paramedical services?",
       "expected_keywords": [
         "TODO"
       ],
-      "notes": ""
+      "notes": "Section 3 - Extended health care benefit > Paramedical services"
     },
     {
       "id": "in_02",
@@ -16,23 +16,23 @@
       "expected_keywords": [
         "TODO"
       ],
-      "notes": ""
+      "notes": "Prescription drug benefit"
     },
     {
       "id": "in_03",
-      "question": "Are pre-authorizations required?",
+      "question": "When is a Prior Authorization form needed?",
       "expected_keywords": [
         "TODO"
       ],
-      "notes": ""
+      "notes": "Section 1 - How your policy works > When is a Prior Authorization form needed?"
     },
     {
       "id": "in_04",
-      "question": "What expenses are excluded from coverage?",
+      "question": "What expenses are excluded from health care benefits?",
       "expected_keywords": [
         "TODO"
       ],
-      "notes": ""
+      "notes": "Exclusions to health care benefits"
     },
     {
       "id": "in_05",
@@ -40,7 +40,7 @@
       "expected_keywords": [
         "TODO"
       ],
-      "notes": ""
+      "notes": "Section 1 - How your policy works > Eligibility"
     },
     {
       "id": "in_06",
@@ -48,7 +48,23 @@
       "expected_keywords": [
         "TODO"
       ],
-      "notes": ""
+      "notes": "Section 2 - How we pay claims"
+    },
+    {
+      "id": "in_07",
+      "question": "Are emergency medical travel benefits covered under this policy?",
+      "expected_keywords": [
+        "TODO"
+      ],
+      "notes": "Section 4 - Emergency medical travel benefits"
+    },
+    {
+      "id": "in_08",
+      "question": "Is dental coverage included, and on which plans?",
+      "expected_keywords": [
+        "TODO"
+      ],
+      "notes": "Dental benefit (not available on DrugPlus or HealthStarter plans)"
     }
   ],
   "out_of_scope": [
@@ -56,25 +72,25 @@
       "id": "out_01",
       "question": "What is the capital of France?",
       "expected": "I don't know",
-      "notes": "clearly unrelated"
+      "notes": "General knowledge, unrelated to the policy."
     },
     {
       "id": "out_02",
       "question": "Does this policy cover flood damage to my house?",
       "expected": "I don't know",
-      "notes": "wrong policy type"
+      "notes": "Property/home insurance, not covered by this health policy."
     },
     {
       "id": "out_03",
       "question": "Will my car insurance premium go up after an accident?",
       "expected": "I don't know",
-      "notes": "different insurance domain"
+      "notes": "Auto insurance, not covered by this health policy."
     },
     {
       "id": "out_04",
       "question": "Can you give me legal advice about suing my insurer?",
       "expected": "I don't know",
-      "notes": "out-of-scope and guardrail (no legal advice)"
+      "notes": "Legal advice, not policy content."
     }
   ]
 }
