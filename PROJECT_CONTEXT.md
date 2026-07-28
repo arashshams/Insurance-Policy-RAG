@@ -45,11 +45,11 @@ policy PDF is never committed (privacy).
 - Day 3: reconciled NB03 with shared pipeline; extracted doc images to `assets/`; removed a stray nbstripout install cell; dropped langchain/langchain-core from NB01 (kept langchain-text-splitters); aligned requirements.txt.
 - Day 4: hardened retrieval/generation — DISTANCE_THRESHOLD filtering, IDK short-circuit, rate-limit backoff.
 - Day 5: evaluation harness (`04_evaluation.ipynb`) + question set (`eval/eval_questions.json`). Metrics: out-of-scope abstention rate (guardrail), in-scope retrieval hit rate, in-scope answer-keyword rate. Free-tier-safe (sequential + paced + cached); privacy-safe (no real policy facts committed).
-- Day 5 (calibration, partial): aligned eval questions to the Manulife sample policy and expanded to 8 in-scope + 4 out-of-scope. Fixed NB03 (removed dead LangChain imports — project does not use LangChain; set GEN_MODEL=gemini-flash-latest). Ran a retrieval-only sweep over all 12 questions: in-scope distances ~0.25–0.34, out-of-scope ~0.40–0.50, so DISTANCE_THRESHOLD was set to 0.37.
+- Day 5 (calibration, in progress): switched GEN_MODEL to `gemini-flash-latest` (the only free-tier generation model that still responds; pinned 2.x/2.5 models are exhausted/retired). Pinned `httpx==0.27.2` (openai 1.14.3 needs httpx<0.28). Ran NB01 (37 chunks) -> NB02 (index, 37) -> NB03 (real answers) -> NB04. Eval: out-of-scope abstention 100% (4/4), in-scope retrieval hit 100%. Filled expected_keywords for in_01/in_02/in_03 from observed answers; reworded in_02 (annual drug max lives in a separate Schedule of Benefits, so the old phrasing was unanswerable).
 
 ## Roadmap — remaining
 
-- **Day 5 calibration (finish it):** generation is now unblocked on free tier via `GEN_MODEL = gemini-flash-latest` (the pinned 2.x/2.5 models were retired or at limit 0). ACTION: run NB03 then NB04 in one session (rate-limit/sleep pacing handles free-tier RPM); read each in-scope answer and fill `expected_keywords` in `eval_questions.json` (replace "TODO"); delete `eval/eval_results.json`; re-run. Re-check DISTANCE_THRESHOLD if chunking or the embedding model changes.
+- **Day 5 calibration (finish it):** generation now works on free tier via `gemini-flash-latest`. Remaining: capture answers for in_04-in_08 and fill their `expected_keywords` in `eval/eval_questions.json` (BLOCKED today by the free-tier DAILY generation cap ~20 req/model; resumes when the daily quota resets). Then move to Day 6.
 - Day 6: consolidate shared config (single PROJECT_ROOT/settings block) AND refactor the notebook logic into a plain module `rag_pipeline.py`. Design requirement: expose index-building as a callable (e.g. `build_index_from_pdf(pdf) -> collection`) parameterized by PDF source — NOT hard-wired to the Drive path — so the app can do runtime uploads.
 - Day 7: README + documentation (include the eval results as the quality story).
 - Day 8: Streamlit MVP app (imports `rag_pipeline.py`), deployed free on Streamlit Community Cloud. Supports two modes: bundled-policy demo, and user-upload (runtime, per-session temp index — not Drive).
@@ -65,4 +65,18 @@ policy PDF is never committed (privacy).
 
 ## How to resume
 
-1. Read this file. 2. `git checkout new_dev` (all work lives here). 3. Next actionable step is finishing the Day-5 calibration (generation now works on free tier via gemini-flash-latest): run NB03 then NB04, fill in expected_keywords, then Day 6 (refactor to `rag_pipeline.py`). Commit new work to `new_dev` and open a PR to `master` when a milestone is done.
+1. Read this file. 2. `git checkout new_dev` (all work lives here). 3. Next actionable step is finishing the Day-5 calibration (generation works on free tier via `gemini-flash-latest`): re-apply the Colab env recipe (see below), remount Drive, run NB03 then NB04 (NB04 needs `%run` of NB03 in the same kernel), capture in_04-in_08 answers, fill their expected_keywords, then Day 6 (refactor to `rag_pipeline.py`). Commit new work to `new_dev` and open a PR to `master` when a milestone is done.
+
+
+## Paused — 2026-07-28 (resume recipe)
+
+Paused for the day at the free-tier DAILY generation cap. Open PR #5 (`new_dev` -> `master`) carries today's changes: GEN_MODEL=gemini-flash-latest, httpx pin, eval-question fixes. **PR #5 is not merged** — merge is the maintainer's call.
+
+Colab env recipe (re-apply after ANY runtime recycle, then Restart session, then remount Drive):
+```
+numpy==1.26.4  pypdf==4.2.0  tiktoken==0.7.0  langchain-text-splitters==0.2.4
+openai==1.14.3  chromadb==0.4.24  tqdm==4.66.4  httpx==0.27.2
+```
+A runtime recycle wipes BOTH the pip packages AND the Drive mount — reinstall pins, restart, then `drive.mount('/content/drive')`.
+
+Outstanding to finish calibration (needs daily quota reset): run NB03 then NB04 (via `%run` of NB03 in NB04's kernel), record answers for in_04-in_08, fill their `expected_keywords`, commit to `new_dev`.
