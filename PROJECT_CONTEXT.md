@@ -1,7 +1,7 @@
 # Project Context & Handoff — Insurance-Policy-RAG
 
 > Working notes so development can resume cleanly after a break or a closed tab.
-> Last updated: 2026-07-24. All development happens on the `new_dev` branch.
+> Last updated: 2026-07-27. All development happens on the `new_dev` branch.
 
 ## What this project is
 
@@ -10,13 +10,19 @@ A user asks a natural-language question; the system retrieves the most relevant 
 answers **only** from those passages with citations, and explicitly abstains ("I don't know") when
 the policy does not cover the question. Built with Gemini embeddings + ChromaDB + a Gemini chat model.
 
+## Sample policy used for calibration
+
+A published, SAMPLE-watermarked **Manulife FlexCare (medical) contract**, 32 pages, is used as the
+working policy for calibration. NB01 ingestion produces **37 chunks** from this document. The real
+policy PDF is never committed (privacy).
+
 ## Repository layout (key paths)
 
-- `notebooks/01_document_ingestion.ipynb` — PDF ingest + chunking. Source of truth = 45 chunks (`chunks.json`).
+- `notebooks/01_document_ingestion.ipynb` — PDF ingest + chunking. Source of truth = 37 chunks (`chunks.json`).
 - `notebooks/02_embeddings_and_indexing.ipynb` — builds the persistent Chroma index.
 - `notebooks/03_insurance_policy_rag.ipynb` — retrieval + guardrailed answer generation.
 - `notebooks/04_evaluation.ipynb` — Day-5 evaluation harness.
-- `notebooks/eval/eval_questions.json` — evaluation question set (6 in-scope, 4 out-of-scope).
+- `notebooks/eval/eval_questions.json` — evaluation question set (8 in-scope, 4 out-of-scope).
 - `notebooks/assets/` — documentation images extracted out of NB03.
 - `data/documents/` — where the policy PDF lives locally (NOT committed, for privacy).
 
@@ -24,55 +30,53 @@ the policy does not cover the question. Built with Gemini embeddings + ChromaDB 
 
 - `PROJECT_ROOT` = `/content/drive/MyDrive/Insurance-Policy-RAG` (overridable via `INSURANCE_RAG_ROOT`).
 - Chroma index at `PROJECT_ROOT/chroma`; collection name `insurance_policy_cvdb`.
-- `EMBED_MODEL = gemini-embedding-001`; `GEN_MODEL = gemini-2.5-flash` (both FREE-tier eligible).
-- `K_DEFAULT = 4`; `DISTANCE_THRESHOLD = 0.6` (cosine distance; lower = more similar; TUNE during calibration).
+- `EMBED_MODEL = gemini-embedding-001`; `GEN_MODEL = gemini-flash-latest` (both FREE-tier eligible). NOTE: gemini-2.5-flash is retired for new keys and gemini-2.0-flash returns limit 0 (no free generation quota) on this account; the gemini-flash-latest alias has live free-tier generation quota, so GEN_MODEL points there.
+- `K_DEFAULT = 4`; `DISTANCE_THRESHOLD = 0.37` (cosine distance; lower = more similar). Calibrated via a retrieval sweep — see Day-5 notes below.
 - Retrieval short-circuits to `IDK_ANSWER = "I don't know"` when nothing passes the threshold.
 
 ## Pipeline interfaces (targeted by the eval harness / future app)
 
 - `retrieve_top_k(query, k=K_DEFAULT, threshold=DISTANCE_THRESHOLD)` -> list of `{id, text, metadata, score}`.
-- `answer_question(question, k=K_DEFAULT, model_name=GEN_MODEL)` -> `(answer_text, pages, retrieved)`;
-  returns `(IDK_ANSWER, [], [])` on empty retrieval.
+- `answer_question(question, k=K_DEFAULT, model_name=GEN_MODEL)` -> `(answer_text, pages, retrieved)`; returns `(IDK_ANSWER, [], [])` on empty retrieval.
 
 ## Progress — done
 
-- **Day 1–2:** embeddings + Chroma index (45 chunks, chunks.json as source of truth).
-- **Day 3:** reconciled NB03 with shared pipeline; extracted doc images to `assets/`; removed a stray
-  `nbstripout` install cell; dropped `langchain`/`langchain-core` from NB01 (kept `langchain-text-splitters`,
-  identical 45-chunk output); aligned `requirements.txt`.
-- **Day 4:** hardened retrieval/generation — `DISTANCE_THRESHOLD` filtering, IDK short-circuit, rate-limit backoff.
-- **Day 5:** evaluation harness (`04_evaluation.ipynb`) + question set (`eval/eval_questions.json`).
-  Metrics: out-of-scope abstention rate (guardrail), in-scope retrieval hit rate, in-scope answer-keyword rate.
-  Free-tier-safe (sequential + paced + cached); privacy-safe (no real policy facts committed).
+- Day 1–2: embeddings + Chroma index (`chunks.json` as source of truth).
+- Day 3: reconciled NB03 with shared pipeline; extracted doc images to `assets/`; removed a stray nbstripout install cell; dropped langchain/langchain-core from NB01 (kept langchain-text-splitters); aligned requirements.txt.
+- Day 4: hardened retrieval/generation — DISTANCE_THRESHOLD filtering, IDK short-circuit, rate-limit backoff.
+- Day 5: evaluation harness (`04_evaluation.ipynb`) + question set (`eval/eval_questions.json`). Metrics: out-of-scope abstention rate (guardrail), in-scope retrieval hit rate, in-scope answer-keyword rate. Free-tier-safe (sequential + paced + cached); privacy-safe (no real policy facts committed).
+- Day 5 (calibration, in progress): switched GEN_MODEL to `gemini-flash-latest` (the only free-tier generation model that still responds; pinned 2.x/2.5 models are exhausted/retired). Pinned `httpx==0.27.2` (openai 1.14.3 needs httpx<0.28). Ran NB01 (37 chunks) -> NB02 (index, 37) -> NB03 (real answers) -> NB04. Eval: out-of-scope abstention 100% (4/4), in-scope retrieval hit 100%. Filled expected_keywords for in_01/in_02/in_03 from observed answers; reworded in_02 (annual drug max lives in a separate Schedule of Benefits, so the old phrasing was unanswerable).
 
 ## Roadmap — remaining
 
-- **Day 5 calibration (maintainer TODO, run in Colab):** run NB03 then NB04 in one session; read each
-  in-scope answer and fill `expected_keywords` in `eval_questions.json` (replace `"TODO"`); delete
-  `eval/eval_results.json`; re-run. Tune `DISTANCE_THRESHOLD` if in-scope Qs wrongly abstain (raise it)
-  or out-of-scope Qs fail to abstain (lower it). Also confirm NB01 still yields the same 45 chunks.
-- **Day 6:** consolidate shared config (single PROJECT_ROOT/settings block) AND refactor the notebook
-  logic into a plain module `rag_pipeline.py`. Design requirement: expose index-building as a callable
-  (e.g. `build_index_from_pdf(pdf) -> collection`) parameterized by PDF source — NOT hard-wired to the
-  Drive path — so the app can do runtime uploads.
-- **Day 7:** README + documentation (include the eval results as the quality story).
-- **Day 8:** Streamlit MVP app (imports `rag_pipeline.py`), deployed free on Streamlit Community Cloud.
-  Supports two modes: bundled-policy demo, and user-upload (runtime, per-session temp index — not Drive).
-- **Day 9:** FastAPI backend exposing `POST /ask` (JSON) over the same `rag_pipeline.py`; repoint Streamlit
-  to call the API over HTTP. Deploy on a free-tier host (verify current limits: HF Spaces / Render / Fly.io).
+- **Day 5 calibration (finish it):** generation now works on free tier via `gemini-flash-latest`. Remaining: capture answers for in_04-in_08 and fill their `expected_keywords` in `eval/eval_questions.json` (BLOCKED today by the free-tier DAILY generation cap ~20 req/model; resumes when the daily quota resets). Then move to Day 6.
+- Day 6: consolidate shared config (single PROJECT_ROOT/settings block) AND refactor the notebook logic into a plain module `rag_pipeline.py`. Design requirement: expose index-building as a callable (e.g. `build_index_from_pdf(pdf) -> collection`) parameterized by PDF source — NOT hard-wired to the Drive path — so the app can do runtime uploads.
+- Day 7: README + documentation (include the eval results as the quality story).
+- Day 8: Streamlit MVP app (imports `rag_pipeline.py`), deployed free on Streamlit Community Cloud. Supports two modes: bundled-policy demo, and user-upload (runtime, per-session temp index — not Drive).
+- Day 9: FastAPI backend exposing `POST /ask` (JSON) over the same `rag_pipeline.py`; repoint Streamlit to call the API over HTTP. Deploy on a free-tier host (verify current limits: HF Spaces / Render / Fly.io).
 
 ## Standing decisions & constraints
 
-- All dev on `new_dev`; merge to `master` via PR at milestones (keeps the contribution graph current —
-  the graph only counts commits on the default branch, which is why branch-only work looked "missing").
-- Keep the whole project within the **Gemini free tier**. Note: on the free tier, content may be used to
-  improve Google's products — fine for a sample policy, worth noting for real data.
-- Privacy: the real policy PDF is intentionally NOT in the repo. Do not paste/commit real policy contents;
-  keep committed eval keywords generic if a figure feels sensitive.
+- All dev on `new_dev`; merge to `master` via PR at milestones (keeps the contribution graph current — the graph only counts commits on the default branch).
+- Keep the whole project within the Gemini free tier. Note: on the free tier, content may be used to improve Google's products — fine for a sample policy, worth noting for real data.
+- Privacy: the real policy PDF is intentionally NOT in the repo. Do not paste/commit real policy contents; keep committed eval keywords generic if a figure feels sensitive.
 - App uploads should happen at runtime in the app (per-session temp index), not via a Drive folder.
+- NB03/NB04 debugging is done in a Drive clone; remember to mirror any fixes back to the committed notebooks on `new_dev`.
 
 ## How to resume
 
-1. Read this file. 2. `git checkout new_dev` (all work lives here). 3. Next actionable step is the Day-5
-calibration run above, then Day 6 (refactor to `rag_pipeline.py`). Commit new work to `new_dev` and open
-a PR to `master` when a milestone is done.
+1. Read this file. 2. `git checkout new_dev` (all work lives here). 3. Next actionable step is finishing the Day-5 calibration (generation works on free tier via `gemini-flash-latest`): re-apply the Colab env recipe (see below), remount Drive, run NB03 then NB04 (NB04 needs `%run` of NB03 in the same kernel), capture in_04-in_08 answers, fill their expected_keywords, then Day 6 (refactor to `rag_pipeline.py`). Commit new work to `new_dev` and open a PR to `master` when a milestone is done.
+
+
+## Paused — 2026-07-28 (resume recipe)
+
+Paused for the day at the free-tier DAILY generation cap. Open PR #5 (`new_dev` -> `master`) carries today's changes: GEN_MODEL=gemini-flash-latest, httpx pin, eval-question fixes. **PR #5 is not merged** — merge is the maintainer's call.
+
+Colab env recipe (re-apply after ANY runtime recycle, then Restart session, then remount Drive):
+```
+numpy==1.26.4  pypdf==4.2.0  tiktoken==0.7.0  langchain-text-splitters==0.2.4
+openai==1.14.3  chromadb==0.4.24  tqdm==4.66.4  httpx==0.27.2
+```
+A runtime recycle wipes BOTH the pip packages AND the Drive mount — reinstall pins, restart, then `drive.mount('/content/drive')`.
+
+Outstanding to finish calibration (needs daily quota reset): run NB03 then NB04 (via `%run` of NB03 in NB04's kernel), record answers for in_04-in_08, fill their `expected_keywords`, commit to `new_dev`.

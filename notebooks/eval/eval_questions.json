@@ -6,23 +6,32 @@
       "id": "in_01",
       "question": "Is physiotherapy covered under paramedical services?",
       "expected_keywords": [
-        "TODO"
+        "physiotherapy",
+        "paramedical",
+        "covered",
+        "licensed"
       ],
       "notes": "Section 3 - Extended health care benefit > Paramedical services"
     },
     {
       "id": "in_02",
-      "question": "What is the annual maximum for prescription drugs?",
+      "question": "Which prescription drugs are covered, and which are excluded?",
       "expected_keywords": [
-        "TODO"
+        "formulary",
+        "generic",
+        "excluded",
+        "vitamins"
       ],
-      "notes": "Prescription drug benefit"
+      "notes": "Prescription drug benefit (reworded: the annual dollar maximum is not in this policy - it defers to the Schedule of Benefits; ask about formulary/coverage/exclusions instead)"
     },
     {
       "id": "in_03",
       "question": "When is a Prior Authorization form needed?",
       "expected_keywords": [
-        "TODO"
+        "prior authorization",
+        "before",
+        "purchase",
+        "medical"
       ],
       "notes": "Section 1 - How your policy works > When is a Prior Authorization form needed?"
     },
