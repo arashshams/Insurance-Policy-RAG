@@ -17,6 +17,10 @@ langchain-text-splitters==0.2.4
 # (embeddings in notebook 02, generation in notebook 03)
 openai==1.14.3
 
+# Pin httpx: openai 1.14.3 passes a 'proxies' kwarg that httpx >=0.28 removed,
+# which crashes client construction. 0.27.x keeps the compatible signature.
+httpx==0.27.2
+
 # Vector database (notebooks 02 and 03)
 chromadb==0.4.24
 
