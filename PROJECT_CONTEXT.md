@@ -30,7 +30,7 @@ policy PDF is never committed (privacy).
 
 - `PROJECT_ROOT` = `/content/drive/MyDrive/Insurance-Policy-RAG` (overridable via `INSURANCE_RAG_ROOT`).
 - Chroma index at `PROJECT_ROOT/chroma`; collection name `insurance_policy_cvdb`.
-- `EMBED_MODEL = gemini-embedding-001`; `GEN_MODEL = gemini-2.0-flash` (both FREE-tier eligible). NOTE: gemini-2.5-flash was retired for new keys, so GEN_MODEL was moved to gemini-2.0-flash.
+- `EMBED_MODEL = gemini-embedding-001`; `GEN_MODEL = gemini-flash-latest` (both FREE-tier eligible). NOTE: gemini-2.5-flash is retired for new keys and gemini-2.0-flash returns limit 0 (no free generation quota) on this account; the gemini-flash-latest alias has live free-tier generation quota, so GEN_MODEL points there.
 - `K_DEFAULT = 4`; `DISTANCE_THRESHOLD = 0.37` (cosine distance; lower = more similar). Calibrated via a retrieval sweep — see Day-5 notes below.
 - Retrieval short-circuits to `IDK_ANSWER = "I don't know"` when nothing passes the threshold.
 
@@ -45,11 +45,11 @@ policy PDF is never committed (privacy).
 - Day 3: reconciled NB03 with shared pipeline; extracted doc images to `assets/`; removed a stray nbstripout install cell; dropped langchain/langchain-core from NB01 (kept langchain-text-splitters); aligned requirements.txt.
 - Day 4: hardened retrieval/generation — DISTANCE_THRESHOLD filtering, IDK short-circuit, rate-limit backoff.
 - Day 5: evaluation harness (`04_evaluation.ipynb`) + question set (`eval/eval_questions.json`). Metrics: out-of-scope abstention rate (guardrail), in-scope retrieval hit rate, in-scope answer-keyword rate. Free-tier-safe (sequential + paced + cached); privacy-safe (no real policy facts committed).
-- Day 5 (calibration, partial): aligned eval questions to the Manulife sample policy and expanded to 8 in-scope + 4 out-of-scope. Fixed NB03 (removed dead LangChain imports — project does not use LangChain; set GEN_MODEL=gemini-2.0-flash). Ran a retrieval-only sweep over all 12 questions: in-scope distances ~0.25–0.34, out-of-scope ~0.40–0.50, so DISTANCE_THRESHOLD was set to 0.37.
+- Day 5 (calibration, partial): aligned eval questions to the Manulife sample policy and expanded to 8 in-scope + 4 out-of-scope. Fixed NB03 (removed dead LangChain imports — project does not use LangChain; set GEN_MODEL=gemini-flash-latest). Ran a retrieval-only sweep over all 12 questions: in-scope distances ~0.25–0.34, out-of-scope ~0.40–0.50, so DISTANCE_THRESHOLD was set to 0.37.
 
 ## Roadmap — remaining
 
-- **Day 5 calibration (BLOCKED on generation quota):** the Gemini generation quota on the current key is `limit: 0`, so answer generation (demo query + NB04) cannot run yet. Embeddings/retrieval work fine. ACTION: provision a key with generation quota at aistudio.google.com, then run NB03 then NB04 in one session; read each in-scope answer and fill `expected_keywords` in `eval_questions.json` (replace "TODO"); delete `eval/eval_results.json`; re-run. Re-check DISTANCE_THRESHOLD if chunking or the embedding model changes.
+- **Day 5 calibration (finish it):** generation is now unblocked on free tier via `GEN_MODEL = gemini-flash-latest` (the pinned 2.x/2.5 models were retired or at limit 0). ACTION: run NB03 then NB04 in one session (rate-limit/sleep pacing handles free-tier RPM); read each in-scope answer and fill `expected_keywords` in `eval_questions.json` (replace "TODO"); delete `eval/eval_results.json`; re-run. Re-check DISTANCE_THRESHOLD if chunking or the embedding model changes.
 - Day 6: consolidate shared config (single PROJECT_ROOT/settings block) AND refactor the notebook logic into a plain module `rag_pipeline.py`. Design requirement: expose index-building as a callable (e.g. `build_index_from_pdf(pdf) -> collection`) parameterized by PDF source — NOT hard-wired to the Drive path — so the app can do runtime uploads.
 - Day 7: README + documentation (include the eval results as the quality story).
 - Day 8: Streamlit MVP app (imports `rag_pipeline.py`), deployed free on Streamlit Community Cloud. Supports two modes: bundled-policy demo, and user-upload (runtime, per-session temp index — not Drive).
@@ -65,4 +65,4 @@ policy PDF is never committed (privacy).
 
 ## How to resume
 
-1. Read this file. 2. `git checkout new_dev` (all work lives here). 3. Next actionable step is finishing the Day-5 calibration once a generation-capable key is available, then Day 6 (refactor to `rag_pipeline.py`). Commit new work to `new_dev` and open a PR to `master` when a milestone is done.
+1. Read this file. 2. `git checkout new_dev` (all work lives here). 3. Next actionable step is finishing the Day-5 calibration (generation now works on free tier via gemini-flash-latest): run NB03 then NB04, fill in expected_keywords, then Day 6 (refactor to `rag_pipeline.py`). Commit new work to `new_dev` and open a PR to `master` when a milestone is done.
