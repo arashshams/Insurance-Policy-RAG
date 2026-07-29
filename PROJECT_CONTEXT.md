@@ -45,11 +45,11 @@ policy PDF is never committed (privacy).
 - Day 3: reconciled NB03 with shared pipeline; extracted doc images to `assets/`; removed a stray nbstripout install cell; dropped langchain/langchain-core from NB01 (kept langchain-text-splitters); aligned requirements.txt.
 - Day 4: hardened retrieval/generation — DISTANCE_THRESHOLD filtering, IDK short-circuit, rate-limit backoff.
 - Day 5: evaluation harness (`04_evaluation.ipynb`) + question set (`eval/eval_questions.json`). Metrics: out-of-scope abstention rate (guardrail), in-scope retrieval hit rate, in-scope answer-keyword rate. Free-tier-safe (sequential + paced + cached); privacy-safe (no real policy facts committed).
-- Day 5 (calibration, in progress): switched GEN_MODEL to `gemini-flash-latest` (the only free-tier generation model that still responds; pinned 2.x/2.5 models are exhausted/retired). Pinned `httpx==0.27.2` (openai 1.14.3 needs httpx<0.28). Ran NB01 (37 chunks) -> NB02 (index, 37) -> NB03 (real answers) -> NB04. Eval: out-of-scope abstention 100% (4/4), in-scope retrieval hit 100%. Filled expected_keywords for in_01/in_02/in_03 from observed answers; reworded in_02 (annual drug max lives in a separate Schedule of Benefits, so the old phrasing was unanswerable).
+- Day 5 (calibration, DONE): GEN_MODEL=`gemini-flash-latest` (only free-tier generation model still responding). Pinned `httpx==0.27.2`. Ran NB01 (37 chunks) -> NB02 (index) -> NB03 (real answers) -> full in-scope eval. Results: out-of-scope abstention 100%, in-scope retrieval hit 100%, 7/8 in-scope answered (in_02 abstains BY DESIGN - the annual drug maximum is in the separate Schedule of Benefits, not this policy). Filled `expected_keywords` for ALL in-scope questions in_01-in_08 (no TODOs left).
 
 ## Roadmap — remaining
 
-- **Day 5 calibration (finish it):** generation now works on free tier via `gemini-flash-latest`. Remaining: capture answers for in_04-in_08 and fill their `expected_keywords` in `eval/eval_questions.json` (BLOCKED today by the free-tier DAILY generation cap ~20 req/model; resumes when the daily quota resets). Then move to Day 6.
+- **Day 5 calibration: COMPLETE.** All in-scope eval questions have ground-truth `expected_keywords`; pipeline validated end-to-end on free tier. (Merged via PR #5; final keyword fills in PR #6.) Optional later tweak: adjust any keyword found too strict/loose on a future eval run - normal tuning, not a redo.
 - Day 6: consolidate shared config (single PROJECT_ROOT/settings block) AND refactor the notebook logic into a plain module `rag_pipeline.py`. Design requirement: expose index-building as a callable (e.g. `build_index_from_pdf(pdf) -> collection`) parameterized by PDF source — NOT hard-wired to the Drive path — so the app can do runtime uploads.
 - Day 7: README + documentation (include the eval results as the quality story).
 - Day 8: Streamlit MVP app (imports `rag_pipeline.py`), deployed free on Streamlit Community Cloud. Supports two modes: bundled-policy demo, and user-upload (runtime, per-session temp index — not Drive).
@@ -65,7 +65,7 @@ policy PDF is never committed (privacy).
 
 ## How to resume
 
-1. Read this file. 2. `git checkout new_dev` (all work lives here). 3. Next actionable step is finishing the Day-5 calibration (generation works on free tier via `gemini-flash-latest`): re-apply the Colab env recipe (see below), remount Drive, run NB03 then NB04 (NB04 needs `%run` of NB03 in the same kernel), capture in_04-in_08 answers, fill their expected_keywords, then Day 6 (refactor to `rag_pipeline.py`). Commit new work to `new_dev` and open a PR to `master` when a milestone is done.
+1. Read this file. 2. `git checkout new_dev`. 3. Day-5 calibration is DONE. Next actionable step is **Day 6**: refactor the notebook pipeline into a plain `rag_pipeline.py` module (single shared config block) exposing index-building as a callable parameterized by PDF source (NOT hard-wired to the Drive path) so the app can do runtime uploads. If you need to re-run notebooks, apply the Colab env recipe below, remount Drive, then run in order.
 
 
 ## Paused — 2026-07-28 (resume recipe)
@@ -80,3 +80,16 @@ openai==1.14.3  chromadb==0.4.24  tqdm==4.66.4  httpx==0.27.2
 A runtime recycle wipes BOTH the pip packages AND the Drive mount — reinstall pins, restart, then `drive.mount('/content/drive')`.
 
 Outstanding to finish calibration (needs daily quota reset): run NB03 then NB04 (via `%run` of NB03 in NB04's kernel), record answers for in_04-in_08, fill their `expected_keywords`, commit to `new_dev`.
+
+
+## Paused — 2026-07-29 (calibration complete)
+
+Day-5 calibration is finished. All eight in-scope eval questions now have `expected_keywords` (committed on `new_dev`). Open **PR #6** (`new_dev` -> `master`) carries the final keyword fills for in_04-in_08; **not merged** (maintainer's call). PR #5 (earlier calibration work) was already merged.
+
+Eval snapshot: out-of-scope abstention 100%, in-scope retrieval hit 100%, in_02 abstains by design (correct guardrail). Model `gemini-flash-latest` on free tier; runs sequential + paced.
+
+Colab gotchas learned this session (re-apply after ANY runtime recycle): the recycle wipes BOTH pip packages AND the Drive mount, and silently reverts numpy to 2.x. Recipe: reinstall pins -> Runtime>Restart session -> `drive.mount('/content/drive', force_remount=True)`. The Drive mount also drops intermittently mid-session; if a path check returns False/empty, just force_remount and retry. The notebooks live at `/content/drive/MyDrive/Insurance-Policy-RAG_Old/Insurance-Policy-RAG/notebooks/`; the data root (chunks.json, chroma, eval/) is the top-level `/content/drive/MyDrive/Insurance-Policy-RAG/`. Chroma collection name: `insurance_policy_cvdb` (37 docs, 3072-dim Gemini embeddings).
+
+To capture eval answers without the fragile whole-file `%run`: load NB03's code cells via `exec` (skipping the build cells and the broken `query_texts` diagnostic cell), then loop `answer_question` over `eval_questions.json['in_scope']` with a short sleep between calls.
+
+Next milestone: **Day 6** — `rag_pipeline.py` refactor (see resume step 3 above).
