@@ -39,7 +39,10 @@
       "id": "in_04",
       "question": "What expenses are excluded from health care benefits?",
       "expected_keywords": [
-        "TODO"
+        "cosmetic",
+        "experimental",
+        "government",
+        "family"
       ],
       "notes": "Exclusions to health care benefits"
     },
@@ -47,7 +50,10 @@
       "id": "in_05",
       "question": "Who is eligible for coverage under this policy?",
       "expected_keywords": [
-        "TODO"
+        "resident",
+        "Canada",
+        "government",
+        "18"
       ],
       "notes": "Section 1 - How your policy works > Eligibility"
     },
@@ -55,7 +61,10 @@
       "id": "in_06",
       "question": "How do I submit a claim?",
       "expected_keywords": [
-        "TODO"
+        "form",
+        "receipt",
+        "invoice",
+        "submit"
       ],
       "notes": "Section 2 - How we pay claims"
     },
@@ -63,7 +72,10 @@
       "id": "in_07",
       "question": "Are emergency medical travel benefits covered under this policy?",
       "expected_keywords": [
-        "TODO"
+        "travel",
+        "emergency",
+        "outside",
+        "age"
       ],
       "notes": "Section 4 - Emergency medical travel benefits"
     },
@@ -71,7 +83,10 @@
       "id": "in_08",
       "question": "Is dental coverage included, and on which plans?",
       "expected_keywords": [
-        "TODO"
+        "dental",
+        "DrugPlus",
+        "HealthStarter",
+        "plan"
       ],
       "notes": "Dental benefit (not available on DrugPlus or HealthStarter plans)"
     }
