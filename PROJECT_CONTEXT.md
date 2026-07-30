@@ -46,11 +46,12 @@ policy PDF is never committed (privacy).
 - Day 4: hardened retrieval/generation — DISTANCE_THRESHOLD filtering, IDK short-circuit, rate-limit backoff.
 - Day 5: evaluation harness (`04_evaluation.ipynb`) + question set (`eval/eval_questions.json`). Metrics: out-of-scope abstention rate (guardrail), in-scope retrieval hit rate, in-scope answer-keyword rate. Free-tier-safe (sequential + paced + cached); privacy-safe (no real policy facts committed).
 - Day 5 (calibration, DONE): GEN_MODEL=`gemini-flash-latest` (only free-tier generation model still responding). Pinned `httpx==0.27.2`. Ran NB01 (37 chunks) -> NB02 (index) -> NB03 (real answers) -> full in-scope eval. Results: out-of-scope abstention 100%, in-scope retrieval hit 100%, 7/8 in-scope answered (in_02 abstains BY DESIGN - the annual drug maximum is in the separate Schedule of Benefits, not this policy). Filled `expected_keywords` for ALL in-scope questions in_01-in_08 (no TODOs left).
+- Day 6 (refactor, DONE): consolidated the pipeline into `src/rag_pipeline.py` — env-overridable config (dev-persistent vs app-ephemeral), Gemini client factory + embed_query/embed_texts, dual-mode `build_index_from_pdf` (path or bytes; in-memory for shipped app), and `retrieve_top_k`/`answer_question` (0.37 threshold, IDK short-circuit, get_client for generation). Sanity-checked in Colab: 37 chunks, in-scope answered with citations, out-of-scope abstains with 0 hits.
 
 ## Roadmap — remaining
 
 - **Day 5 calibration: COMPLETE.** All in-scope eval questions have ground-truth `expected_keywords`; pipeline validated end-to-end on free tier. (Merged via PR #5; final keyword fills in PR #6.) Optional later tweak: adjust any keyword found too strict/loose on a future eval run - normal tuning, not a redo.
-- Day 6: consolidate shared config (single PROJECT_ROOT/settings block) AND refactor the notebook logic into a plain module `rag_pipeline.py`. Design requirement: expose index-building as a callable (e.g. `build_index_from_pdf(pdf) -> collection`) parameterized by PDF source — NOT hard-wired to the Drive path — so the app can do runtime uploads.
+- **Day 6: COMPLETE.** Notebook logic refactored into a single importable module `src/rag_pipeline.py` (4 sections: config, client+embeddings, dual-mode index builder, retrieval+generation). Index-building exposed as `build_index_from_pdf(source, persist_dir=None)` — accepts a path OR uploaded bytes, NOT hard-wired to Drive. Two runtime modes: dev-persistent (on-disk Chroma + optional chunks.json) and app-ephemeral (in-memory, nothing persisted). All calibrated values preserved; verified end-to-end on free tier. (Carried in PR to `master`.)
 - Day 7: README + documentation (include the eval results as the quality story).
 - Day 8: Streamlit MVP app (imports `rag_pipeline.py`), deployed free on Streamlit Community Cloud. Supports two modes: bundled-policy demo, and user-upload (runtime, per-session temp index — not Drive).
 - Day 9: FastAPI backend exposing `POST /ask` (JSON) over the same `rag_pipeline.py`; repoint Streamlit to call the API over HTTP. Deploy on a free-tier host (verify current limits: HF Spaces / Render / Fly.io).
@@ -93,3 +94,13 @@ Colab gotchas learned this session (re-apply after ANY runtime recycle): the rec
 To capture eval answers without the fragile whole-file `%run`: load NB03's code cells via `exec` (skipping the build cells and the broken `query_texts` diagnostic cell), then loop `answer_question` over `eval_questions.json['in_scope']` with a short sleep between calls.
 
 Next milestone: **Day 6** — `rag_pipeline.py` refactor (see resume step 3 above).
+
+## Paused — 2026-07-30 (Day 6 complete)
+
+Day-6 refactor is DONE and committed to `new_dev` in four incremental commits (config, client+embeddings, index builder, retrieval+generation). `src/rag_pipeline.py` is now a self-contained, importable module (~457 lines) with no hard `google.colab` dependency (lazy secret fallback) and no hard Drive path (env-overridable).
+
+Architecture confirmed this session: DEV mode builds a persistent on-disk Chroma index (+ optional dev-only chunks.json); SHIPPED APP mode embeds the user-uploaded PDF straight into an in-memory (ephemeral) Chroma collection and persists NOTHING to disk (privacy + no reason to store a stranger's document). Same code path via `build_index_from_pdf(source, persist_dir=...)`.
+
+Sanity-checked end-to-end in Colab against the sample policy: 37 chunks (matches calibration), in-scope query answered with page citations (top distance ~0.336), out-of-scope query returns "I don't know" with 0 hits via the pre-LLM short-circuit. Calibrated values all intact (chunking cl100k_base/800/128, cosine space, 0.37 threshold, temperature 0.0).
+
+Open PR (`new_dev` -> `master`) carries the Day-6 module + this context update; **not merged** (maintainer's call). Next up: Day 7 (README/documentation, using the eval results as the quality story).
