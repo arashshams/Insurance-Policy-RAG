@@ -335,3 +335,123 @@ def save_chunks(chunks, path=CHUNKS_PATH):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(chunks, f, ensure_ascii=False, indent=2)
     return path
+
+
+# =============================================================================
+# Section 4 - Retrieval + grounded generation
+# =============================================================================
+# retrieve_top_k(): embed the query, pull the k nearest chunks, drop any whose
+#   cosine distance exceeds DISTANCE_THRESHOLD (0.37, calibrated) so off-topic
+#   queries return [].
+# answer_question(): if nothing passed the threshold, short-circuit to
+#   IDK_ANSWER WITHOUT calling the LLM (drives out-of-scope abstention);
+#   otherwise build a grounded prompt and generate.
+# The collection is passed in explicitly so the same code serves both the
+# dev-persistent and the app-ephemeral index.
+
+IDK_ANSWER = "I don't know"
+
+RAG_SYSTEM_MESSAGE = """
+You are an assistant that answers employee insurance policy questions using only the provided context.
+Context will be provided between <Context> and </Context>.
+If the answer is not contained in the context, respond exactly with: \"I don't know\".
+Do not hallucinate. Provide concise, policy-grounded answers.
+"""
+
+RAG_USER_TEMPLATE = """
+<Context>
+{context}
+</Context>
+
+<Question>
+{question}
+</Question>
+"""
+
+
+def retrieve_top_k(collection, query, k=K_DEFAULT, threshold=DISTANCE_THRESHOLD):
+    """Return the k nearest chunks whose cosine distance <= threshold.
+
+    Results above the threshold are dropped, so an off-topic query returns an
+    empty list instead of forcing in irrelevant chunks. Each hit is a dict:
+    {"id", "text", "metadata", "score"}.
+    """
+    q_emb = embed_query(query)
+    results = collection.query(
+        query_embeddings=[q_emb],
+        n_results=k,
+        include=["documents", "metadatas", "distances"],
+    )
+    ids = results["ids"][0]
+    docs_text = results["documents"][0]
+    metadatas = results["metadatas"][0]
+    distances = results.get("distances", [[]])[0]
+
+    hits = []
+    for idx, (_id, t, m) in enumerate(zip(ids, docs_text, metadatas)):
+        score = float(distances[idx]) if distances else None
+        # keep only sufficiently-similar chunks (None score => keep, can't judge)
+        if score is None or score <= threshold:
+            hits.append({"id": _id, "text": t, "metadata": m, "score": score})
+    return hits
+
+
+def answer_question(collection, question, k=K_DEFAULT, model_name=GEN_MODEL):
+    """Retrieve grounded context and generate an answer.
+
+    Returns (answer_text, pages, retrieved). If nothing passes the relevance
+    threshold, short-circuits to IDK_ANSWER without calling the LLM.
+    """
+    # 1) Retrieve top-k relevant chunks (already distance-filtered)
+    retrieved = retrieve_top_k(collection, question, k=k)
+
+    # 1a) Short-circuit: no grounded context -> answer "I don't know".
+    if not retrieved:
+        return IDK_ANSWER, [], []
+
+    # 2) Build context string (id header per chunk for citation)
+    context_items = []
+    for r in retrieved:
+        header = f"[{r['id']}]"
+        context_items.append(header + " " + r["text"])
+    context_str = "\n\n---\n\n".join(context_items)
+
+    # 3) Build messages and call chat completion (with retry/backoff)
+    prompt_messages = [
+        {"role": "system", "content": RAG_SYSTEM_MESSAGE},
+        {"role": "user", "content": RAG_USER_TEMPLATE.format(
+            context=context_str, question=question)},
+    ]
+
+    client = get_client()
+    retries = 0
+    sleep_time = QUERY_INITIAL_SLEEP
+    while True:
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=prompt_messages,
+                temperature=0.0,
+                max_tokens=512,
+            )
+            break
+        except RateLimitError:
+            retries += 1
+            if retries > QUERY_MAX_RETRIES:
+                raise RuntimeError(
+                    f"Generation rate limit persists after {QUERY_MAX_RETRIES} "
+                    f"retries."
+                )
+            time.sleep(sleep_time)
+            sleep_time *= 2
+
+    answer_text = response.choices[0].message.content.strip()
+
+    # 4) Extract page numbers for citation
+    pages = sorted({
+        doc.get("metadata", {}).get("page")
+        for doc in retrieved
+        if isinstance(doc, dict) and "page" in doc.get("metadata", {})
+    })
+
+    return answer_text, pages, retrieved
