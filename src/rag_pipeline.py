@@ -68,3 +68,105 @@ QUERY_INITIAL_SLEEP = float(os.environ.get("INSURANCE_RAG_INITIAL_SLEEP", "2.0")
 
 # Abstention answer returned when nothing relevant is retrieved
 IDK_ANSWER = "I don't know"
+
+
+# ----------------------------------------------------------------------------
+# Gemini client factory + embedding functions
+# ----------------------------------------------------------------------------
+
+import time
+
+from openai import OpenAI
+from openai import RateLimitError
+
+
+def _read_api_key() -> str:
+    """Resolve the Gemini API key without storing or logging it.
+
+    Resolution order (portable across app / local / Colab):
+      1. GEMINI_API_KEY environment variable (used by the shipped app + local),
+      2. Colab Secrets (userdata) as a fallback when running in Colab.
+    google.colab is imported lazily so this module has no hard Colab dependency.
+    """
+    key = os.environ.get("GEMINI_API_KEY")
+    if key:
+        return key
+    try:
+        from google.colab import userdata  # lazy: only exists in Colab
+        key = userdata.get("GEMINI_API_KEY")
+        if key:
+            return key
+    except Exception:
+        pass
+    raise RuntimeError(
+        "No Gemini API key found. Set the GEMINI_API_KEY environment variable "
+        "(or add it to Colab Secrets when running in Colab)."
+    )
+
+
+def get_client() -> OpenAI:
+    """Create an OpenAI-compatible client pointed at the Gemini endpoint."""
+    return OpenAI(api_key=_read_api_key(), base_url=GEMINI_BASE_URL)
+
+
+# Batch size for embedding many chunks at once (index build).
+EMBED_BATCH = int(os.environ.get("INSURANCE_RAG_EMBED_BATCH", "16"))
+
+
+def embed_query(text: str, client: OpenAI | None = None) -> list[float]:
+    """Embed a single string, retrying with exponential backoff on rate limits."""
+    client = client or get_client()
+    retries = 0
+    sleep_time = QUERY_INITIAL_SLEEP
+    while True:
+        try:
+            resp = client.embeddings.create(model=EMBED_MODEL, input=[text])
+            return resp.data[0].embedding
+        except RateLimitError:
+            retries += 1
+            if retries > QUERY_MAX_RETRIES:
+                raise RuntimeError(
+                    f"Embedding rate limit persists after {QUERY_MAX_RETRIES} retries."
+                )
+            time.sleep(sleep_time)
+            sleep_time *= 2
+
+
+def embed_texts(
+    texts: list[str],
+    client: OpenAI | None = None,
+    batch: int = EMBED_BATCH,
+    progress: bool = False,
+) -> list[list[float]]:
+    """Embed many strings in batches, with the same retry/backoff pacing.
+
+    Used when building an index (dev-persistent or app-ephemeral). `progress`
+    optionally shows a tqdm bar; kept off by default so the app stays quiet.
+    """
+    client = client or get_client()
+
+    iterator = range(0, len(texts), batch)
+    if progress:
+        from tqdm import tqdm
+        iterator = tqdm(iterator, desc="Embedding batches")
+
+    all_embeddings: list[list[float]] = []
+    for i in iterator:
+        batch_texts = texts[i : i + batch]
+        retries = 0
+        sleep_time = QUERY_INITIAL_SLEEP
+        while True:
+            try:
+                resp = client.embeddings.create(model=EMBED_MODEL, input=batch_texts)
+                all_embeddings.extend([r.embedding for r in resp.data])
+                break
+            except RateLimitError:
+                retries += 1
+                if retries > QUERY_MAX_RETRIES:
+                    raise RuntimeError(
+                        f"Embedding rate limit persists after {QUERY_MAX_RETRIES} "
+                        f"retries. Consider waiting longer or reducing batch size."
+                    )
+                time.sleep(sleep_time)
+                sleep_time *= 2
+    return all_embeddings
