@@ -62,6 +62,14 @@ K_DEFAULT = int(os.environ.get("INSURANCE_RAG_K", "4"))
 # distances ~0.25-0.34, out-of-scope ~0.40-0.50; 0.37 cleanly separates them.
 DISTANCE_THRESHOLD = float(os.environ.get("INSURANCE_RAG_THRESHOLD", "0.37"))
 
+# --- Chunking parameters (calibrated; MUST match notebook to keep 0.37 valid) ---
+CHUNK_SIZE = int(os.environ.get("INSURANCE_RAG_CHUNK_SIZE", "800"))
+CHUNK_OVERLAP = int(os.environ.get("INSURANCE_RAG_CHUNK_OVERLAP", "128"))
+ENCODING_NAME = os.environ.get("INSURANCE_RAG_ENCODING", "cl100k_base")
+
+# Page-quality gate: skip a page if its 'scramble ratio' exceeds this.
+SCRAMBLE_THRESHOLD = float(os.environ.get("INSURANCE_RAG_SCRAMBLE_THRESHOLD", "0.5"))
+
 # Query-time retry/backoff for free-tier rate limits (mirrors indexing loop)
 QUERY_MAX_RETRIES = int(os.environ.get("INSURANCE_RAG_MAX_RETRIES", "5"))
 QUERY_INITIAL_SLEEP = float(os.environ.get("INSURANCE_RAG_INITIAL_SLEEP", "2.0"))
@@ -170,3 +178,160 @@ def embed_texts(
                 time.sleep(sleep_time)
                 sleep_time *= 2
     return all_embeddings
+
+
+
+# =============================================================================
+# Section 3 - Index builder (dual-mode: dev-persistent / app-ephemeral)
+# =============================================================================
+# Dev mode  (persist_dir is a path): build a PersistentClient index on disk so
+#            the 37-chunk index can be reloaded fast without re-embedding.
+# App mode  (persist_dir is None):   embed the user-uploaded PDF straight into an
+#            in-memory EphemeralClient; NOTHING is written to disk (privacy).
+# chunks.json is DEV-ONLY and is never written by the app path.
+
+import re as _re
+
+
+def _scramble_ratio(text: str) -> float:
+    """Fraction of 'word-like' tokens that look scrambled/garbage.
+
+    Used as a page-quality gate to skip pages that pypdf extracted poorly
+    (e.g. heavily-graphical or OCR-hostile pages). A page is dropped when the
+    ratio exceeds SCRAMBLE_THRESHOLD.
+    """
+    tokens = _re.findall(r"[A-Za-z]+", text)
+    if not tokens:
+        return 1.0
+    bad = 0
+    for tok in tokens:
+        # a token with no vowels and length >= 4 is almost certainly garbage
+        if len(tok) >= 4 and not _re.search(r"[aeiouAEIOU]", tok):
+            bad += 1
+    return bad / len(tokens)
+
+
+def extract_pages(source):
+    """Read a PDF and return a list of {"page": int, "text": str}.
+
+    ``source`` may be a filesystem path (str/os.PathLike) OR a file-like /
+    bytes object (as delivered by an upload widget). This keeps the same code
+    path for dev (path on Drive) and the shipped app (uploaded bytes).
+    """
+    from pypdf import PdfReader
+
+    reader = PdfReader(source)
+    pages = []
+    for i, page in enumerate(reader.pages):
+        text = page.extract_text() or ""
+        pages.append({"page": i + 1, "text": text})
+    return pages
+
+
+def chunk_pages(pages, source_name="policy.pdf"):
+    """Split per-page text into overlapping chunks (calibrated splitter).
+
+    Returns a list of chunk dicts: {"id", "text", "page", "source"}.
+    Splitting is done per page so page numbers stay accurate in metadata.
+    Empty pages and low-quality (scrambled) pages are skipped.
+    """
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        encoding_name=ENCODING_NAME,
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+    )
+
+    chunks = []
+    idx = 0
+    for pg in pages:
+        text = (pg.get("text") or "").strip()
+        if not text:
+            continue
+        if _scramble_ratio(text) > SCRAMBLE_THRESHOLD:
+            continue
+        for piece in splitter.split_text(text):
+            piece = piece.strip()
+            if not piece:
+                continue
+            chunks.append({
+                "id": f"doc_{idx}",
+                "text": piece,
+                "page": pg["page"],
+                "source": source_name,
+            })
+            idx += 1
+    return chunks
+
+
+def _get_chroma_client(persist_dir):
+    """Return a Chroma client: Persistent when a dir is given, else Ephemeral."""
+    import chromadb
+
+    if persist_dir:
+        os.makedirs(persist_dir, exist_ok=True)
+        return chromadb.PersistentClient(path=persist_dir)
+    return chromadb.EphemeralClient()
+
+
+def build_index_from_pdf(source, persist_dir=None,
+                         collection_name=COLLECTION_NAME,
+                         source_name="policy.pdf"):
+    """Build a Chroma collection from a PDF and return (collection, chunks).
+
+    persist_dir=None  -> in-memory (shipped-app path, nothing persisted)
+    persist_dir=<str> -> on-disk PersistentClient (dev path)
+
+    The collection is deleted+recreated for a clean, reproducible rebuild.
+    Embeddings are produced by embed_texts() (Section 2), so the vector space
+    matches retrieval exactly and the 0.37 threshold stays valid.
+    """
+    pages = extract_pages(source)
+    chunks = chunk_pages(pages, source_name=source_name)
+    if not chunks:
+        raise RuntimeError("No usable text extracted from the PDF.")
+
+    client = _get_chroma_client(persist_dir)
+
+    # clean rebuild: drop any stale collection first
+    try:
+        client.delete_collection(collection_name)
+    except Exception:
+        pass
+    collection = client.create_collection(
+        name=collection_name,
+        metadata={"hnsw:space": "cosine"},
+    )
+
+    texts = [c["text"] for c in chunks]
+    embeddings = embed_texts(texts)
+    collection.add(
+        ids=[c["id"] for c in chunks],
+        documents=texts,
+        metadatas=[{"page": c["page"], "source": c["source"]} for c in chunks],
+        embeddings=embeddings,
+    )
+    return collection, chunks
+
+
+def load_persistent_collection(persist_dir=PERSIST_DIR,
+                               collection_name=COLLECTION_NAME):
+    """Dev fast-path: reopen an existing on-disk index without re-embedding."""
+    import chromadb
+
+    client = chromadb.PersistentClient(path=persist_dir)
+    return client.get_collection(collection_name)
+
+
+def save_chunks(chunks, path=CHUNKS_PATH):
+    """Optional DEV-ONLY helper: dump chunks to JSON for reproducibility.
+
+    Never called by the shipped in-memory app path.
+    """
+    import json
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(chunks, f, ensure_ascii=False, indent=2)
+    return path
