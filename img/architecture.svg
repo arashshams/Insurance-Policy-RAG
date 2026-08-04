@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="620" viewBox="0 0 1000 620" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#5b6470"/>
+    </marker>
+    <marker id="arrowB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#1f6feb"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1000" height="620" fill="#ffffff"/>
+  <text x="500" y="38" text-anchor="middle" font-size="24" font-weight="700" fill="#1f2328">Insurance-Policy-RAG — Workflow</text>
+
+  <rect x="24" y="66" width="952" height="196" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="40" y="90" font-size="14" font-weight="700" fill="#57606a">INDEXING (offline)</text>
+
+  <rect x="44" y="108" width="150" height="66" rx="8" fill="#fff" stroke="#8250df" stroke-width="2"/>
+  <text x="119" y="138" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Policy PDF</text>
+  <text x="119" y="156" text-anchor="middle" font-size="11" fill="#57606a">data/documents/</text>
+
+  <rect x="230" y="108" width="150" height="66" rx="8" fill="#fff" stroke="#8250df" stroke-width="2"/>
+  <text x="305" y="132" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Ingest + Chunk</text>
+  <text x="305" y="150" text-anchor="middle" font-size="11" fill="#57606a">overlap + metadata</text>
+  <text x="305" y="165" text-anchor="middle" font-size="11" fill="#57606a">37 chunks</text>
+
+  <rect x="416" y="108" width="150" height="66" rx="8" fill="#fff" stroke="#1a7f37" stroke-width="2"/>
+  <text x="491" y="132" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Gemini</text>
+  <text x="491" y="150" text-anchor="middle" font-size="11" fill="#57606a">embedding-001</text>
+  <text x="491" y="165" text-anchor="middle" font-size="11" fill="#57606a">embeddings</text>
+
+  <rect x="602" y="108" width="180" height="66" rx="8" fill="#fff" stroke="#bf3989" stroke-width="2"/>
+  <text x="692" y="132" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">ChromaDB</text>
+  <text x="692" y="150" text-anchor="middle" font-size="11" fill="#57606a">collection:</text>
+  <text x="692" y="165" text-anchor="middle" font-size="11" fill="#57606a">insurance_policy_cvdb</text>
+
+  <line x1="194" y1="141" x2="226" y2="141" stroke="#5b6470" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="380" y1="141" x2="412" y2="141" stroke="#5b6470" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="566" y1="141" x2="598" y2="141" stroke="#5b6470" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="24" y="286" width="952" height="300" rx="10" fill="#ddf4ff" stroke="#54aeff"/>
+  <text x="40" y="310" font-size="14" font-weight="700" fill="#0969da">QUERY (per question) — src/rag_pipeline.py</text>
+
+  <rect x="44" y="330" width="150" height="60" rx="8" fill="#fff" stroke="#0969da" stroke-width="2"/>
+  <text x="119" y="365" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">User question</text>
+
+  <rect x="44" y="450" width="150" height="66" rx="8" fill="#fff" stroke="#1a7f37" stroke-width="2"/>
+  <text x="119" y="478" text-anchor="middle" font-size="13" font-weight="600" fill="#1f2328">Gemini embed</text>
+  <text x="119" y="496" text-anchor="middle" font-size="11" fill="#57606a">embed_query</text>
+
+  <rect x="250" y="440" width="180" height="86" rx="8" fill="#fff" stroke="#bf3989" stroke-width="2"/>
+  <text x="340" y="470" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Retriever</text>
+  <text x="340" y="488" text-anchor="middle" font-size="11" fill="#57606a">top-k = 4 (cosine)</text>
+  <text x="340" y="503" text-anchor="middle" font-size="11" fill="#57606a">threshold = 0.37</text>
+  <text x="340" y="518" text-anchor="middle" font-size="11" fill="#57606a">retrieve_top_k()</text>
+
+  <polygon points="530,483 585,448 640,483 585,518" fill="#fff3cd" stroke="#9a6700" stroke-width="2"/>
+  <text x="585" y="480" text-anchor="middle" font-size="11" font-weight="600" fill="#1f2328">any hit</text>
+  <text x="585" y="494" text-anchor="middle" font-size="11" font-weight="600" fill="#1f2328">passes?</text>
+
+  <rect x="720" y="330" width="230" height="80" rx="8" fill="#fff" stroke="#1a7f37" stroke-width="2"/>
+  <text x="835" y="360" text-anchor="middle" font-size="14" font-weight="600" fill="#1f2328">Gemini generation</text>
+  <text x="835" y="378" text-anchor="middle" font-size="11" fill="#57606a">gemini-flash-latest, T=0.0</text>
+  <text x="835" y="393" text-anchor="middle" font-size="11" fill="#57606a">guardrailed, grounded prompt</text>
+
+  <rect x="720" y="440" width="230" height="60" rx="8" fill="#dafbe1" stroke="#1a7f37" stroke-width="2"/>
+  <text x="835" y="466" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">Answer + page citations</text>
+  <text x="835" y="484" text-anchor="middle" font-size="11" fill="#57606a">answer_question()</text>
+
+  <rect x="530" y="540" width="230" height="38" rx="8" fill="#ffebe9" stroke="#cf222e" stroke-width="2"/>
+  <text x="645" y="564" text-anchor="middle" font-size="13" font-weight="700" fill="#1f2328">"I don't know" (0 hits)</text>
+
+  <line x1="119" y1="390" x2="119" y2="446" stroke="#1f6feb" stroke-width="2" marker-end="url(#arrowB)"/>
+  <line x1="194" y1="483" x2="246" y2="483" stroke="#1f6feb" stroke-width="2" marker-end="url(#arrowB)"/>
+  <line x1="430" y1="483" x2="526" y2="483" stroke="#1f6feb" stroke-width="2" marker-end="url(#arrowB)"/>
+  <path d="M640,483 L680,483 L680,370 L716,370" fill="none" stroke="#1a7f37" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="690" y="360" font-size="11" font-weight="700" fill="#1a7f37">yes</text>
+  <line x1="835" y1="410" x2="835" y2="436" stroke="#1a7f37" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M585,518 L585,540" fill="none" stroke="#cf222e" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="595" y="534" font-size="11" font-weight="700" fill="#cf222e">no</text>
+
+  <path d="M692,174 L692,300 L470,300 L470,438" fill="none" stroke="#bf3989" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+  <text x="478" y="330" font-size="11" fill="#bf3989">indexed vectors</text>
+</svg>
