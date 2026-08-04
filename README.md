@@ -31,9 +31,9 @@ The diagram above shows the full workflow. In short:
 
 ```
 PDF -> text extraction -> chunking (overlap + metadata)
-    -> Gemini embeddings -> ChromaDB vector store
-    -> similarity retrieval (distance-thresholded)
-    -> guardrailed answer generation (with citations, or "I don't know")
+-> Gemini embeddings -> ChromaDB vector store
+-> similarity retrieval (distance-thresholded)
+-> guardrailed answer generation (with citations, or "I don't know")
 ```
 
 The whole pipeline is consolidated into a single importable module, **`src/rag_pipeline.py`**, so notebooks, evaluation, and future apps all share one code path and one config block.
@@ -70,18 +70,18 @@ The module exposes two functions that the notebooks, the evaluation harness, and
 
 ```
 img/
-  architecture.svg                 # workflow diagram (shown above)
+architecture.svg # workflow diagram (shown above)
 notebooks/
-  01_document_ingestion.ipynb      # PDF ingest + chunking (source of truth: chunks.json)
-  02_embeddings_and_indexing.ipynb # builds the persistent Chroma index
-  03_insurance_policy_rag.ipynb    # retrieval + guardrailed answer generation
-  04_evaluation.ipynb              # evaluation harness
-  eval/eval_questions.json         # eval question set (8 in-scope, 4 out-of-scope)
-  assets/                          # documentation images
+01_document_ingestion.ipynb # PDF ingest + chunking (source of truth: chunks.json)
+02_embeddings_and_indexing.ipynb # builds the persistent Chroma index
+03_insurance_policy_rag.ipynb # retrieval + guardrailed answer generation
+04_evaluation.ipynb # evaluation harness
+eval/eval_questions.json # eval question set (8 in-scope, 4 out-of-scope)
+assets/ # documentation images
 src/
-  rag_pipeline.py                  # the shared, importable pipeline
+rag_pipeline.py # the shared, importable pipeline
 data/
-  documents/                       # local policy PDF (NOT committed — privacy)
+documents/ # local policy PDF (NOT committed — privacy)
 requirements.txt
 ```
 
@@ -138,13 +138,13 @@ The single non-answer is **correct by design**: that question asks for a figure 
 - **FastAPI backend** exposing `POST /ask` over the same pipeline, with the app calling it over HTTP.
 - Multi-document support (policy + amendments) and query logging / metrics.
 
-## 🙌 Contributions
+## Contributions
 
 Pull requests are welcome!
 
 For major changes, please open an issue first to discuss what you would like to change or add.
 
-## 📜 License
+## License
 
 This project is released under the [MIT License](LICENSE).
 
