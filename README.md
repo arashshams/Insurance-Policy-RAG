@@ -138,6 +138,16 @@ The single non-answer is **correct by design**: that question asks for a figure 
 - **FastAPI backend** exposing `POST /ask` over the same pipeline, with the app calling it over HTTP.
 - Multi-document support (policy + amendments) and query logging / metrics.
 
+## 🙌 Contributions
+
+Pull requests are welcome!
+
+For major changes, please open an issue first to discuss what you would like to change or add.
+
+## 📜 License
+
+This project is released under the [MIT License](LICENSE).
+
 ---
 
 *This project is a technical demonstration of RAG principles and responsible AI design. It is not a source of legal or financial advice.*
