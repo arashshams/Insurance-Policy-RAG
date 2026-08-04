@@ -6,6 +6,8 @@
 
 Ask a question about your coverage; the system retrieves the most relevant passages from the policy, answers *only* from those passages with page citations, and explicitly abstains when the policy doesn't cover the question.
 
+![Insurance-Policy-RAG workflow diagram](img/architecture.svg)
+
 ---
 
 ## Why this project
@@ -25,6 +27,8 @@ Understanding insurance coverage usually means scrolling through a long policy P
 
 ## Architecture
 
+The diagram above shows the full workflow. In short:
+
 ```
 PDF -> text extraction -> chunking (overlap + metadata)
     -> Gemini embeddings -> ChromaDB vector store
@@ -38,14 +42,15 @@ The whole pipeline is consolidated into a single importable module, **`src/rag_p
 
 | Setting | Value |
 |---|---|
-| Embedding model | `gemini-embedding-001` |
-| Generation model | `gemini-flash-latest` |
-| Vector store | ChromaDB, collection `insurance_policy_cvdb` |
-| Retrieval `k` | 4 |
+| Embedding model | `gemini-embedding-001` (3072-dim) |
+| Generation model | `gemini-flash-latest` (temperature 0.0) |
+| Vector store | ChromaDB, cosine space, collection `insurance_policy_cvdb` |
+| Chunking | `cl100k_base` tokenizer, size 800, overlap 128 |
+| Retrieval `k` | 4 (`K_DEFAULT`) |
 | Distance threshold | 0.37 (cosine; lower = more similar) |
 | Empty-retrieval behavior | short-circuits to "I don't know" |
 
-All values are calibrated (see Evaluation) and env-overridable. The project is designed to run entirely within the Gemini **free tier**.
+All values are calibrated (see Evaluation) and env-overridable. The project root defaults to a Drive path but can be pointed anywhere with the `INSURANCE_RAG_ROOT` environment variable, and the whole project is designed to run within the Gemini **free tier**.
 
 ### Two runtime modes
 
@@ -54,9 +59,18 @@ All values are calibrated (see Evaluation) and env-overridable. The project is d
 
 Both go through the same entry point: `build_index_from_pdf(source, persist_dir=...)`, which accepts either a file path or uploaded bytes.
 
+## Pipeline interface
+
+The module exposes two functions that the notebooks, the evaluation harness, and any future app all call:
+
+- `retrieve_top_k(query, k=K_DEFAULT, threshold=DISTANCE_THRESHOLD)` -> a list of `{id, text, metadata, score}` for the passages that clear the threshold.
+- `answer_question(question, k=K_DEFAULT, model_name=GEN_MODEL)` -> `(answer_text, pages, retrieved)`, returning `("I don't know", [], [])` when retrieval comes back empty.
+
 ## Repository layout
 
 ```
+img/
+  architecture.svg                 # workflow diagram (shown above)
 notebooks/
   01_document_ingestion.ipynb      # PDF ingest + chunking (source of truth: chunks.json)
   02_embeddings_and_indexing.ipynb # builds the persistent Chroma index
@@ -75,7 +89,7 @@ requirements.txt
 
 1. Install dependencies: `pip install -r requirements.txt`
 2. Provide a Gemini API key (free-tier eligible) via your environment.
-3. Place your policy PDF in `data/documents/`.
+3. Place your policy PDF in `data/documents/` (optionally set `INSURANCE_RAG_ROOT`).
 4. Run the notebooks in order (01 -> 02 -> 03), or import `src/rag_pipeline.py` directly and call `build_index_from_pdf(...)` then `answer_question(...)`.
 
 ### Programmatic use
@@ -94,6 +108,10 @@ answer, pages, retrieved = answer_question("Is physiotherapy covered?")
 - Is physiotherapy covered?
 - Are pre-authorizations required?
 - What expenses are excluded?
+
+## Sample policy (for calibration)
+
+Calibration and the numbers below were produced against a published, SAMPLE-watermarked medical contract (Manulife FlexCare, 32 pages), which ingestion splits into **37 chunks**. This document is only a stand-in for development; the real policy PDF is never committed. Answers are valid only for users covered by the same policy the index was built from.
 
 ## Evaluation (the quality story)
 
