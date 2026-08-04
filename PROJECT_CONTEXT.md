@@ -1,7 +1,7 @@
 # Project Context & Handoff — Insurance-Policy-RAG
 
 > Working notes so development can resume cleanly after a break or a closed tab.
-> Last updated: 2026-07-27. All development happens on the `new_dev` branch.
+> Last updated: 2026-08-04. All development happens on the `new_dev` branch.
 
 ## What this project is
 
@@ -47,12 +47,13 @@ policy PDF is never committed (privacy).
 - Day 5: evaluation harness (`04_evaluation.ipynb`) + question set (`eval/eval_questions.json`). Metrics: out-of-scope abstention rate (guardrail), in-scope retrieval hit rate, in-scope answer-keyword rate. Free-tier-safe (sequential + paced + cached); privacy-safe (no real policy facts committed).
 - Day 5 (calibration, DONE): GEN_MODEL=`gemini-flash-latest` (only free-tier generation model still responding). Pinned `httpx==0.27.2`. Ran NB01 (37 chunks) -> NB02 (index) -> NB03 (real answers) -> full in-scope eval. Results: out-of-scope abstention 100%, in-scope retrieval hit 100%, 7/8 in-scope answered (in_02 abstains BY DESIGN - the annual drug maximum is in the separate Schedule of Benefits, not this policy). Filled `expected_keywords` for ALL in-scope questions in_01-in_08 (no TODOs left).
 - Day 6 (refactor, DONE): consolidated the pipeline into `src/rag_pipeline.py` — env-overridable config (dev-persistent vs app-ephemeral), Gemini client factory + embed_query/embed_texts, dual-mode `build_index_from_pdf` (path or bytes; in-memory for shipped app), and `retrieve_top_k`/`answer_question` (0.37 threshold, IDK short-circuit, get_client for generation). Sanity-checked in Colab: 37 chunks, in-scope answered with citations, out-of-scope abstains with 0 hits.
+- Day 7 (documentation, DONE): rewrote the README grounded in this file (purpose, scope, architecture, config table, two runtime modes, pipeline interface, repo layout, getting-started + programmatic usage, sample-policy note, eval results, responsible-AI, roadmap); added an architecture/workflow diagram (`img/architecture.svg`) embedded on the README front page; added Contributions + License sections; added an MIT `LICENSE` file. All committed to `new_dev`; opened PR #8 (`new_dev` -> `master`).
 
 ## Roadmap — remaining
 
 - **Day 5 calibration: COMPLETE.** All in-scope eval questions have ground-truth `expected_keywords`; pipeline validated end-to-end on free tier. (Merged via PR #5; final keyword fills in PR #6.) Optional later tweak: adjust any keyword found too strict/loose on a future eval run - normal tuning, not a redo.
 - **Day 6: COMPLETE.** Notebook logic refactored into a single importable module `src/rag_pipeline.py` (4 sections: config, client+embeddings, dual-mode index builder, retrieval+generation). Index-building exposed as `build_index_from_pdf(source, persist_dir=None)` — accepts a path OR uploaded bytes, NOT hard-wired to Drive. Two runtime modes: dev-persistent (on-disk Chroma + optional chunks.json) and app-ephemeral (in-memory, nothing persisted). All calibrated values preserved; verified end-to-end on free tier. (Carried in PR to `master`.)
-- Day 7: README + documentation (include the eval results as the quality story).
+- **Day 7: COMPLETE.** High-quality README + documentation delivered (eval results carried as the quality story), architecture diagram embedded, Contributions/License sections, and an MIT `LICENSE` file. Carried in PR #8 (`new_dev` -> `master`).
 - Day 8: Streamlit MVP app (imports `rag_pipeline.py`), deployed free on Streamlit Community Cloud. Supports two modes: bundled-policy demo, and user-upload (runtime, per-session temp index — not Drive).
 - Day 9: FastAPI backend exposing `POST /ask` (JSON) over the same `rag_pipeline.py`; repoint Streamlit to call the API over HTTP. Deploy on a free-tier host (verify current limits: HF Spaces / Render / Fly.io).
 
@@ -104,3 +105,13 @@ Architecture confirmed this session: DEV mode builds a persistent on-disk Chroma
 Sanity-checked end-to-end in Colab against the sample policy: 37 chunks (matches calibration), in-scope query answered with page citations (top distance ~0.336), out-of-scope query returns "I don't know" with 0 hits via the pre-LLM short-circuit. Calibrated values all intact (chunking cl100k_base/800/128, cosine space, 0.37 threshold, temperature 0.0).
 
 Open PR (`new_dev` -> `master`) carries the Day-6 module + this context update; **not merged** (maintainer's call). Next up: Day 7 (README/documentation, using the eval results as the quality story).
+
+## Paused — 2026-08-04 (Day 7 complete)
+
+Day-7 documentation is DONE and committed to `new_dev`. The README was rewritten from this PROJECT_CONTEXT to a high-quality state: project purpose and scope (what it does / does not do), architecture overview + a configuration table, the two runtime modes (dev-persistent vs app-ephemeral), the pipeline interface (`retrieve_top_k` / `answer_question`), repository layout, getting-started + programmatic-use snippets, the sample-policy calibration note, the evaluation results (out-of-scope abstention 100%, in-scope retrieval hit 100%, 7/8 in-scope answered — the one non-answer correct by design), responsible-AI notes, and the roadmap.
+
+A schematic workflow diagram was created at `img/architecture.svg` (PDF -> chunking -> Gemini embeddings -> ChromaDB -> thresholded retrieval -> guardrailed answer generation) and embedded on the README front page. Contributions and License sections were added to the README (plain headings, matching the style of other repos in the profile), and a real MIT `LICENSE` file was added ("Copyright (c) 2026 Arash Shamseddini") so the README license link resolves.
+
+Privacy preserved throughout: no real policy contents committed; the real policy PDF stays out of the repo; all numbers reference the published SAMPLE-watermarked stand-in only.
+
+Open **PR #8** (`new_dev` -> `master`) carries all Day-7 changes (README, `img/architecture.svg`, `LICENSE`); **not merged** (maintainer's call). Next up: Day 8 (Streamlit MVP app importing `rag_pipeline.py`, deployed on Streamlit Community Cloud, with bundled-policy demo + per-session user-upload modes).
