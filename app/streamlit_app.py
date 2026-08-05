@@ -42,6 +42,15 @@ DEMO_INDEX_DIR = os.environ.get(
     "DEMO_INDEX_DIR", str(REPO_ROOT / "app" / "demo_index")
 )
 
+# Example questions surfaced as one-click buttons in demo mode.
+EXAMPLE_QUESTIONS = [
+    "Is physiotherapy covered?",
+    "Are pre-authorizations required?",
+    "What expenses are excluded?",
+]
+
+from src.rag_pipeline import answer_question, load_persistent_collection
+
 # --- Page config ------------------------------------------------------------
 st.set_page_config(
     page_title="Insurance-Policy-RAG",
@@ -74,8 +83,86 @@ with st.sidebar:
         "Runs on the Gemini free tier. Not legal or financial advice."
     )
 
-# --- Mode routing (implemented in later commits) ---------------------------
+
+@st.cache_resource(show_spinner=False)
+def _load_demo_collection(index_dir: str):
+    """Load the pre-built persistent Chroma index for the demo (cached).
+
+    Cached across reruns so the on-disk index is opened once per session,
+    with no embedding calls at startup (free-tier friendly).
+    """
+    return load_persistent_collection(persist_dir=index_dir)
+
+
+def _render_answer(question: str, collection) -> None:
+    """Run the pipeline for one question and render the grounded result."""
+    with st.spinner("Retrieving and generating a grounded answer..."):
+        answer, pages, retrieved = answer_question(collection, question)
+
+    if answer.strip().lower().startswith("i don't know"):
+        st.warning(
+            "I don't know - the policy text retrieved does not cover this "
+            "question, so the system abstains rather than guess."
+        )
+        return
+
+    st.markdown("### Answer")
+    st.write(answer)
+    if pages:
+        cited = ", ".join(str(p) for p in pages)
+        st.caption(f"Cited page(s): {cited}")
+
+    with st.expander(f"Retrieved passages ({len(retrieved)})"):
+        for r in retrieved:
+            page = r.get("metadata", {}).get("page", "?")
+            score = r.get("score")
+            score_str = f"{score:.3f}" if isinstance(score, float) else "n/a"
+            st.markdown(f"**Page {page}** - distance {score_str}")
+            st.write(r.get("text", ""))
+            st.divider()
+
+
+def render_demo_mode() -> None:
+    """Bundled-policy demo: query the pre-built SAMPLE-policy index."""
+    st.info(
+        "Demo mode uses a pre-built index of a published, SAMPLE-watermarked "
+        "policy (Manulife FlexCare). It is a stand-in for development only."
+    )
+
+    if not os.path.isdir(DEMO_INDEX_DIR):
+        st.error(
+            "Demo index not found. Build it once and commit it to "
+            f"'{os.path.relpath(DEMO_INDEX_DIR, REPO_ROOT)}' (see app/README)."
+        )
+        return
+
+    try:
+        collection = _load_demo_collection(DEMO_INDEX_DIR)
+    except Exception as exc:  # noqa: BLE001 - surface load errors to the user
+        st.error(f"Could not open the demo index: {exc}")
+        return
+
+    st.write("Try an example question:")
+    cols = st.columns(len(EXAMPLE_QUESTIONS))
+    clicked = None
+    for col, q in zip(cols, EXAMPLE_QUESTIONS):
+        if col.button(q, use_container_width=True):
+            clicked = q
+
+    typed = st.text_input(
+        "...or ask your own question about the sample policy:",
+        key="demo_query",
+    )
+    if st.button("Ask", type="primary", key="demo_ask"):
+        clicked = typed.strip() or clicked
+
+    question = clicked
+    if question:
+        _render_answer(question, collection)
+
+
+# --- Mode routing -----------------------------------------------------------
 if mode == "Bundled-policy demo":
-    st.info("Bundled-policy demo - coming in the next commit.")
+    render_demo_mode()
 else:
     st.info("Upload mode - coming in a later commit.")
