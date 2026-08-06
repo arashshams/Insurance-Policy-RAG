@@ -2,10 +2,10 @@
 Streamlit MVP for Insurance-Policy-RAG.
 
 Thin UI layer over src/rag_pipeline.py. Two modes:
-  - Bundled-policy demo: loads a pre-built, on-disk Chroma index shipped
-    with the app (no embedding calls at startup -> free-tier friendly).
-  - User upload: builds a per-session, in-memory ephemeral index from an
-    uploaded PDF and persists nothing (privacy).
+- Bundled-policy demo: loads a pre-built, on-disk Chroma index shipped
+  with the app (no embedding calls at startup -> free-tier friendly).
+- User upload: builds a per-session, in-memory ephemeral index from an
+  uploaded PDF and persists nothing (privacy).
 
 Run locally:  streamlit run app/streamlit_app.py
 """
@@ -46,7 +46,6 @@ def _secrets_file_exists() -> bool:
     ]
     return any(p.is_file() for p in candidates)
 
-
 def _load_secrets_into_env() -> None:
     if not _secrets_file_exists():
         return
@@ -58,8 +57,11 @@ def _load_secrets_into_env() -> None:
         if value is not None and key not in os.environ:
             os.environ[key] = str(value)
 
-
 _load_secrets_into_env()
+
+def _api_key_present() -> bool:
+    """True if a Gemini/Google API key is available for generation."""
+    return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
 
 # Path to the pre-built demo index shipped with the app (Option B).
 # Overridable via secrets/env if you store it elsewhere.
@@ -87,6 +89,18 @@ st.caption(
     "doesn't cover the question."
 )
 
+with st.expander("How it works"):
+    st.markdown(
+        "1. Your question is embedded and matched against the policy's "
+        "indexed passages (semantic retrieval).\n"
+        "2. Only passages above a similarity threshold are kept, so "
+        "off-topic questions retrieve nothing.\n"
+        "3. The answer is generated **strictly from those passages** and "
+        "each claim is cited by page.\n"
+        "4. If nothing relevant is retrieved, the system says "
+        "*\"I don't know\"* rather than guessing."
+    )
+
 # --- Sidebar: mode selection ------------------------------------------------
 with st.sidebar:
     st.header("Mode")
@@ -101,10 +115,13 @@ with st.sidebar:
         ),
     )
     st.divider()
+    if _api_key_present():
+        st.caption("API key detected.")
+    else:
+        st.caption("No GEMINI_API_KEY set - answers will be unavailable.")
     st.caption(
         "Runs on the Gemini free tier. Not legal or financial advice."
     )
-
 
 @st.cache_resource(show_spinner=False)
 def _load_demo_collection(index_dir: str):
@@ -114,7 +131,6 @@ def _load_demo_collection(index_dir: str):
     with no embedding calls at startup (free-tier friendly).
     """
     return load_persistent_collection(persist_dir=index_dir)
-
 
 @st.cache_resource(show_spinner=False)
 def _build_uploaded_collection(file_bytes: bytes, cache_key: str):
@@ -130,16 +146,24 @@ def _build_uploaded_collection(file_bytes: bytes, cache_key: str):
     )
     return collection
 
-
 def _render_answer(question: str, collection) -> None:
     """Run the pipeline for one question and render the grounded result."""
+    if not _api_key_present():
+        st.error(
+            "No GEMINI_API_KEY is set, so the system cannot generate an "
+            "answer. Set it as an environment variable locally, or in the "
+            "app's Secrets on Streamlit Community Cloud, then rerun."
+        )
+        return
+
     with st.spinner("Retrieving and generating a grounded answer..."):
         answer, pages, retrieved = answer_question(collection, question)
 
     if answer.strip().lower().startswith("i don't know"):
         st.warning(
-            "I don't know - the policy text retrieved does not cover this "
-            "question, so the system abstains rather than guess."
+            "**I don't know.** The passages retrieved from the policy don't "
+            "cover this question, so the system abstains rather than guess. "
+            "Try rephrasing, or ask about something the policy addresses."
         )
         return
 
@@ -158,7 +182,6 @@ def _render_answer(question: str, collection) -> None:
             st.write(r.get("text", ""))
             st.divider()
 
-
 def _query_ui(collection, key_prefix: str, show_examples: bool = True) -> None:
     """Shared question UI (example buttons + free-text) used by both modes."""
     clicked = None
@@ -174,10 +197,11 @@ def _query_ui(collection, key_prefix: str, show_examples: bool = True) -> None:
     )
     if st.button("Ask", type="primary", key=f"{key_prefix}_ask"):
         clicked = typed.strip() or clicked
+        if not clicked:
+            st.info("Type a question above (or pick an example) first.")
 
     if clicked:
         _render_answer(clicked, collection)
-
 
 def render_demo_mode() -> None:
     """Bundled-policy demo: query the pre-built SAMPLE-policy index."""
@@ -200,7 +224,6 @@ def render_demo_mode() -> None:
         return
 
     _query_ui(collection, key_prefix="demo", show_examples=True)
-
 
 def render_upload_mode() -> None:
     """User-upload: build a per-session, in-memory index from a PDF."""
@@ -226,7 +249,6 @@ def render_upload_mode() -> None:
 
     st.success(f"Indexed '{uploaded.name}'. Ask a question below.")
     _query_ui(collection, key_prefix="upload", show_examples=False)
-
 
 # --- Mode routing -----------------------------------------------------------
 if mode == "Bundled-policy demo":
