@@ -22,20 +22,29 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+# --- Page config (MUST be the first Streamlit command in the script) --------
+st.set_page_config(
+    page_title="Insurance-Policy-RAG",
+    page_icon="\U0001F4C4",
+    layout="centered",
+)
+
 # --- Secrets / config -------------------------------------------------------
 # On Streamlit Community Cloud, put GEMINI_API_KEY (and optionally
 # INSURANCE_RAG_ROOT) in the app's Secrets. Mirror them into the environment
-# so rag_pipeline's env-based config picks them up unchanged.
+# so rag_pipeline's env-based config picks them up unchanged. Accessing
+# st.secrets when no secrets.toml exists raises; we swallow that quietly so
+# a local run with just an env var stays clean (no noisy warnings).
 def _load_secret_into_env(key: str) -> None:
-    if key not in os.environ and key in st.secrets:
-        os.environ[key] = str(st.secrets[key])
+    try:
+        value = st.secrets.get(key)
+    except Exception:
+        value = None
+    if value is not None and key not in os.environ:
+        os.environ[key] = str(value)
 
 for _k in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "INSURANCE_RAG_ROOT"):
-    try:
-        _load_secret_into_env(_k)
-    except Exception:
-        # st.secrets raises if no secrets file exists locally; that's fine.
-        pass
+    _load_secret_into_env(_k)
 
 # Path to the pre-built demo index shipped with the app (Option B).
 # Overridable via secrets/env if you store it elsewhere.
@@ -54,13 +63,6 @@ from src.rag_pipeline import (
     answer_question,
     build_index_from_pdf,
     load_persistent_collection,
-)
-
-# --- Page config ------------------------------------------------------------
-st.set_page_config(
-    page_title="Insurance-Policy-RAG",
-    page_icon="\U0001F4C4",
-    layout="centered",
 )
 
 st.title("Insurance-Policy-RAG")
