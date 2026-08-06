@@ -10,6 +10,7 @@ Thin UI layer over src/rag_pipeline.py. Two modes:
 Run locally:  streamlit run app/streamlit_app.py
 """
 
+import io
 import os
 import sys
 from pathlib import Path
@@ -49,7 +50,11 @@ EXAMPLE_QUESTIONS = [
     "What expenses are excluded?",
 ]
 
-from src.rag_pipeline import answer_question, load_persistent_collection
+from src.rag_pipeline import (
+    answer_question,
+    build_index_from_pdf,
+    load_persistent_collection,
+)
 
 # --- Page config ------------------------------------------------------------
 st.set_page_config(
@@ -94,6 +99,21 @@ def _load_demo_collection(index_dir: str):
     return load_persistent_collection(persist_dir=index_dir)
 
 
+@st.cache_resource(show_spinner=False)
+def _build_uploaded_collection(file_bytes: bytes, cache_key: str):
+    """Build an in-memory ephemeral index from uploaded PDF bytes (cached).
+
+    persist_dir is None, so rag_pipeline uses an EphemeralClient and writes
+    NOTHING to disk. Cached on (name, size) so we embed once per uploaded
+    file per session instead of on every rerun (saves free-tier quota).
+    The returned tuple's chunks are unused here but kept for parity.
+    """
+    collection, _chunks = build_index_from_pdf(
+        io.BytesIO(file_bytes), persist_dir=None, source_name=cache_key
+    )
+    return collection
+
+
 def _render_answer(question: str, collection) -> None:
     """Run the pipeline for one question and render the grounded result."""
     with st.spinner("Retrieving and generating a grounded answer..."):
@@ -122,6 +142,26 @@ def _render_answer(question: str, collection) -> None:
             st.divider()
 
 
+def _query_ui(collection, key_prefix: str, show_examples: bool = True) -> None:
+    """Shared question UI (example buttons + free-text) used by both modes."""
+    clicked = None
+    if show_examples:
+        st.write("Try an example question:")
+        cols = st.columns(len(EXAMPLE_QUESTIONS))
+        for col, q in zip(cols, EXAMPLE_QUESTIONS):
+            if col.button(q, use_container_width=True, key=f"{key_prefix}_{q}"):
+                clicked = q
+
+    typed = st.text_input(
+        "...or ask your own question:", key=f"{key_prefix}_query"
+    )
+    if st.button("Ask", type="primary", key=f"{key_prefix}_ask"):
+        clicked = typed.strip() or clicked
+
+    if clicked:
+        _render_answer(clicked, collection)
+
+
 def render_demo_mode() -> None:
     """Bundled-policy demo: query the pre-built SAMPLE-policy index."""
     st.info(
@@ -142,27 +182,37 @@ def render_demo_mode() -> None:
         st.error(f"Could not open the demo index: {exc}")
         return
 
-    st.write("Try an example question:")
-    cols = st.columns(len(EXAMPLE_QUESTIONS))
-    clicked = None
-    for col, q in zip(cols, EXAMPLE_QUESTIONS):
-        if col.button(q, use_container_width=True):
-            clicked = q
+    _query_ui(collection, key_prefix="demo", show_examples=True)
 
-    typed = st.text_input(
-        "...or ask your own question about the sample policy:",
-        key="demo_query",
+
+def render_upload_mode() -> None:
+    """User-upload: build a per-session, in-memory index from a PDF."""
+    st.info(
+        "Upload a policy PDF to ask questions about it. The index is built "
+        "in memory for this session only and is never stored."
     )
-    if st.button("Ask", type="primary", key="demo_ask"):
-        clicked = typed.strip() or clicked
 
-    question = clicked
-    if question:
-        _render_answer(question, collection)
+    uploaded = st.file_uploader("Policy PDF", type=["pdf"])
+    if uploaded is None:
+        st.caption("Waiting for a PDF...")
+        return
+
+    cache_key = f"{uploaded.name}:{uploaded.size}"
+    try:
+        with st.spinner("Embedding your policy (one-time per upload)..."):
+            collection = _build_uploaded_collection(
+                uploaded.getvalue(), cache_key
+            )
+    except Exception as exc:  # noqa: BLE001 - surface build errors to the user
+        st.error(f"Could not process this PDF: {exc}")
+        return
+
+    st.success(f"Indexed '{uploaded.name}'. Ask a question below.")
+    _query_ui(collection, key_prefix="upload", show_examples=False)
 
 
 # --- Mode routing -----------------------------------------------------------
 if mode == "Bundled-policy demo":
     render_demo_mode()
 else:
-    st.info("Upload mode - coming in a later commit.")
+    render_upload_mode()
