@@ -32,19 +32,34 @@ st.set_page_config(
 # --- Secrets / config -------------------------------------------------------
 # On Streamlit Community Cloud, put GEMINI_API_KEY (and optionally
 # INSURANCE_RAG_ROOT) in the app's Secrets. Mirror them into the environment
-# so rag_pipeline's env-based config picks them up unchanged. Accessing
-# st.secrets when no secrets.toml exists raises; we swallow that quietly so
-# a local run with just an env var stays clean (no noisy warnings).
-def _load_secret_into_env(key: str) -> None:
-    try:
-        value = st.secrets.get(key)
-    except Exception:
-        value = None
-    if value is not None and key not in os.environ:
-        os.environ[key] = str(value)
+# so rag_pipeline's env-based config picks them up unchanged.
+#
+# We only touch st.secrets when a secrets.toml actually exists. Merely reading
+# st.secrets with no file present makes Streamlit log "No secrets files found"
+# (not a catchable exception), so a local run with just an env var would spam
+# that message. Guarding on the file keeps local runs clean while still using
+# secrets on Streamlit Community Cloud.
+def _secrets_file_exists() -> bool:
+    candidates = [
+        Path.home() / ".streamlit" / "secrets.toml",
+        REPO_ROOT / ".streamlit" / "secrets.toml",
+    ]
+    return any(p.is_file() for p in candidates)
 
-for _k in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "INSURANCE_RAG_ROOT"):
-    _load_secret_into_env(_k)
+
+def _load_secrets_into_env() -> None:
+    if not _secrets_file_exists():
+        return
+    for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "INSURANCE_RAG_ROOT"):
+        try:
+            value = st.secrets.get(key)
+        except Exception:
+            value = None
+        if value is not None and key not in os.environ:
+            os.environ[key] = str(value)
+
+
+_load_secrets_into_env()
 
 # Path to the pre-built demo index shipped with the app (Option B).
 # Overridable via secrets/env if you store it elsewhere.
