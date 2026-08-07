@@ -1,7 +1,7 @@
 # Project Context & Handoff — Insurance-Policy-RAG
 
 > Working notes so development can resume cleanly after a break or a closed tab.
-> Last updated: 2026-08-06. All development happens on the `new_dev` branch.
+> Last updated: 2026-08-07. All development happens on the `new_dev` branch.
 
 ## What this project is
 
@@ -49,6 +49,7 @@ policy PDF is never committed (privacy).
 - Day 6 (refactor, DONE): consolidated the pipeline into `src/rag_pipeline.py` — env-overridable config (dev-persistent vs app-ephemeral), Gemini client factory + embed_query/embed_texts, dual-mode `build_index_from_pdf` (path or bytes; in-memory for shipped app), and `retrieve_top_k`/`answer_question` (0.37 threshold, IDK short-circuit, get_client for generation). Sanity-checked in Colab: 37 chunks, in-scope answered with citations, out-of-scope abstains with 0 hits.
 - Day 7 (documentation, DONE): rewrote the README grounded in this file (purpose, scope, architecture, config table, two runtime modes, pipeline interface, repo layout, getting-started + programmatic usage, sample-policy note, eval results, responsible-AI, roadmap); added an architecture/workflow diagram (`img/architecture.svg`) embedded on the README front page; added Contributions + License sections; added an MIT `LICENSE` file. All committed to `new_dev`; opened PR #8 (`new_dev` -> `master`).
 - Day 8 (Streamlit MVP, DONE): built `app/streamlit_app.py` (thin UI over `src/rag_pipeline.py`) in incremental commits on `new_dev` — scaffolding+config, requirements, bundled-policy demo mode (loads a pre-built on-disk Chroma index, no startup embedding), per-session in-memory upload mode (persists nothing), set_page_config ordering + guarded `st.secrets` (clean local run), and UX polish (API-key guard/hint, empty-query guard, clearer abstention, how-it-works). Committed the pre-built demo index at `app/demo_index/` (SAMPLE FlexCare). Local Python 3.11 build produced 38 chunks vs 37 on Colab — environment-sensitive by ~1 chunk (tokenizer/PDF-extractor versions), same on-spec settings (cl100k_base/800/128); both valid.
+- Day 9 (FastAPI backend, DONE): added `api/main.py` exposing `POST /ask` and `GET /health` over `src/rag_pipeline.py` (loads the bundled demo index once at startup, returns grounded page-cited answers with an `abstained` flag). Added `api/README.md` (endpoints, run, config, free-tier deploy). Repointed the Streamlit app to optionally answer demo questions via the API over HTTP when `INSURANCE_RAG_API_URL` is set (falls back to the in-process pipeline otherwise; upload mode stays in-process). Added fastapi/uvicorn/requests to requirements. All incremental commits on `new_dev`.
 
 ## Roadmap — remaining
 
@@ -56,7 +57,7 @@ policy PDF is never committed (privacy).
 - **Day 6: COMPLETE.** Notebook logic refactored into a single importable module `src/rag_pipeline.py` (4 sections: config, client+embeddings, dual-mode index builder, retrieval+generation). Index-building exposed as `build_index_from_pdf(source, persist_dir=None)` — accepts a path OR uploaded bytes, NOT hard-wired to Drive. Two runtime modes: dev-persistent (on-disk Chroma + optional chunks.json) and app-ephemeral (in-memory, nothing persisted). All calibrated values preserved; verified end-to-end on free tier. (Carried in PR to `master`.)
 - **Day 7: COMPLETE.** High-quality README + documentation delivered (eval results carried as the quality story), architecture diagram embedded, Contributions/License sections, and an MIT `LICENSE` file. Carried in PR #8 (`new_dev` -> `master`).
 - **Day 8: COMPLETE.** Streamlit MVP (`app/streamlit_app.py`) importing `rag_pipeline.py`, with two modes: bundled-policy demo (pre-built on-disk index at `app/demo_index/`, no startup embedding) and user-upload (per-session in-memory index, persists nothing). Deploy docs at `app/README.md`. Ready for Streamlit Community Cloud (entry point `app/streamlit_app.py`, `GEMINI_API_KEY` in Secrets). All on `new_dev`.
-- Day 9: FastAPI backend exposing `POST /ask` (JSON) over the same `rag_pipeline.py`; repoint Streamlit to call the API over HTTP. Deploy on a free-tier host (verify current limits: HF Spaces / Render / Fly.io).
+- **Day 9: COMPLETE.** FastAPI backend (`api/main.py`) exposing `POST /ask` + `GET /health` over `rag_pipeline.py`; Streamlit can call it over HTTP via `INSURANCE_RAG_API_URL` (optional, backward-compatible). Docs in `api/README.md`. Actual free-tier deployment (HF Spaces / Render / Fly.io) is a user-side follow-up (account/hosting step). All on `new_dev`.
 
 ## Standing decisions & constraints
 
@@ -124,3 +125,16 @@ Demo index: the pre-built index is committed at `app/demo_index/` (a `chroma.sql
 Environment notes learned this session: on a fresh local env, run notebooks with the `insurance-rag` kernel (register via `python -m ipykernel install --user --name insurance-rag`), not `base`, or imports like `openai` fail. On Windows, Chroma keeps the demo-index `.bin` files open while the app or a notebook kernel is alive; stop the app and shut the kernel down before any `git` op that touches `app/demo_index/` (rebase/checkout), or unlink fails and the working tree files get locked. `policy.pdf` and the scratch `runner.ipynb` are gitignored — never commit either; only the SAMPLE-watermarked policy and its derived index belong in the repo.
 
 Next up: Day 9 — FastAPI backend exposing `POST /ask` (JSON) over the same `rag_pipeline.py`, then repoint Streamlit to call the API over HTTP. Deploy on a free-tier host (verify current limits: HF Spaces / Render / Fly.io).
+
+
+## Paused — 2026-08-07 (Day 9 complete)
+
+Day-9 FastAPI backend is DONE and committed to `new_dev` in incremental commits: requirements (fastapi/uvicorn/requests) -> `api/main.py` -> `api/README.md` -> Streamlit API-mode repoint -> this context update.
+
+Backend (`api/main.py`): a thin ASGI app over `src/rag_pipeline.py`. `GET /health` reports service/index/API-key status without calling the LLM. `POST /ask` takes `{question, k?}` and returns `{answer, pages, abstained, retrieved}`, where `abstained` is true on the IDK short-circuit. The bundled demo index (`app/demo_index/`) is opened ONCE at process start and reused; requests persist nothing. Missing key -> HTTP 503; missing index -> HTTP 503; pipeline error -> HTTP 502. `DEMO_INDEX_DIR` overrides the index path. Run: `uvicorn api.main:app --reload`; interactive docs at `/docs`.
+
+Streamlit repoint: when `INSURANCE_RAG_API_URL` is set, demo mode POSTs to `{url}/ask` (via `requests`) and normalizes the reply back to the in-process `(answer, pages, retrieved)` shape, so the UI is identical either way. When unset, the app is byte-for-byte the old behavior (opens the local demo index). Upload mode ALWAYS runs in-process (the API only serves the bundled demo policy). The key requirement is relaxed in API mode since the key lives on the server.
+
+Not done yet (user-side): actual deployment of the backend to a free-tier host and pointing the Streamlit app at it. Both are account/hosting actions. Backend and app both verified to import/start locally; end-to-end HTTP path exercised via `/docs` / curl is recommended before deploying.
+
+Roadmap status: Days 1-9 COMPLETE. This was the last planned build day; remaining work is deployment + any polish/tuning.
