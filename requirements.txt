@@ -27,6 +27,12 @@ chromadb==0.4.24
 # Progress bars for batched embedding
 tqdm==4.66.4
 
-
 # Streamlit MVP app (app/streamlit_app.py); UI layer over src/rag_pipeline.py
 streamlit==1.37.1
+
+# FastAPI backend (api/main.py): POST /ask over src/rag_pipeline.py, served
+# by uvicorn. pydantic v2 ships with this FastAPI; requests is used by the
+# Streamlit app when it is configured to call the API over HTTP.
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+requests==2.32.3
