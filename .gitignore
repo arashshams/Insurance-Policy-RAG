@@ -12,6 +12,12 @@ __pycache__/
 # --- Data (do not commit private PDFs) ---
 data/documents/*.pdf
 
+# --- Local scratch (index-build helpers, never commit) ---
+# policy.pdf: local SAMPLE PDF used only to build the demo index
+# runner.ipynb: throwaway notebook for running the build
+/policy.pdf
+/runner.ipynb
+
 # --- Vector DB / embeddings storage ---
 chroma/
 

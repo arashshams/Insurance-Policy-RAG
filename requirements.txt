@@ -26,3 +26,7 @@ chromadb==0.4.24
 
 # Progress bars for batched embedding
 tqdm==4.66.4
+
+
+# Streamlit MVP app (app/streamlit_app.py); UI layer over src/rag_pipeline.py
+streamlit==1.37.1
