@@ -7,7 +7,13 @@ Thin UI layer over src/rag_pipeline.py. Two modes:
 - User upload: builds a per-session, in-memory ephemeral index from an
   uploaded PDF and persists nothing (privacy).
 
-Run locally:  streamlit run app/streamlit_app.py
+Demo mode can optionally be served by the FastAPI backend (api/main.py):
+set INSURANCE_RAG_API_URL to the backend's base URL and demo questions are
+answered over HTTP instead of in-process. Upload mode always runs in-process
+(the API only serves the bundled demo policy). If the variable is unset the
+app behaves exactly as before.
+
+Run locally: streamlit run app/streamlit_app.py
 """
 
 import io
@@ -49,7 +55,8 @@ def _secrets_file_exists() -> bool:
 def _load_secrets_into_env() -> None:
     if not _secrets_file_exists():
         return
-    for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "INSURANCE_RAG_ROOT"):
+    for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "INSURANCE_RAG_ROOT",
+                "INSURANCE_RAG_API_URL"):
         try:
             value = st.secrets.get(key)
         except Exception:
@@ -62,6 +69,11 @@ _load_secrets_into_env()
 def _api_key_present() -> bool:
     """True if a Gemini/Google API key is available for generation."""
     return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+
+# Optional FastAPI backend base URL. When set, demo mode calls it over HTTP
+# instead of running the pipeline in-process. Trailing slash is trimmed so we
+# can safely append "/ask".
+API_URL = os.environ.get("INSURANCE_RAG_API_URL", "").strip().rstrip("/")
 
 # Path to the pre-built demo index shipped with the app (Option B).
 # Overridable via secrets/env if you store it elsewhere.
@@ -115,7 +127,9 @@ with st.sidebar:
         ),
     )
     st.divider()
-    if _api_key_present():
+    if API_URL:
+        st.caption(f"Demo served by API: {API_URL}")
+    elif _api_key_present():
         st.caption("API key detected.")
     else:
         st.caption("No GEMINI_API_KEY set - answers will be unavailable.")
@@ -146,9 +160,39 @@ def _build_uploaded_collection(file_bytes: bytes, cache_key: str):
     )
     return collection
 
-def _render_answer(question: str, collection) -> None:
-    """Run the pipeline for one question and render the grounded result."""
-    if not _api_key_present():
+def _answer_via_api(question: str):
+    """Ask the FastAPI backend and normalize its reply to the in-process shape.
+
+    Returns (answer, pages, retrieved) so the rest of the UI is identical
+    whether the answer came from the API or from the local pipeline. Raises
+    on transport/HTTP errors so the caller can surface them.
+    """
+    import requests
+
+    resp = requests.post(
+        f"{API_URL}/ask", json={"question": question}, timeout=60
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    retrieved = [
+        {
+            "id": c.get("id", ""),
+            "text": c.get("text", ""),
+            "metadata": {"page": c.get("page")},
+            "score": c.get("score"),
+        }
+        for c in data.get("retrieved", [])
+    ]
+    return data.get("answer", ""), data.get("pages", []), retrieved
+
+def _render_answer(question: str, collection, use_api: bool = False) -> None:
+    """Run one question and render the grounded result.
+
+    When use_api is True the FastAPI backend answers over HTTP (the API key
+    lives on the server); otherwise the local pipeline runs in-process and a
+    local key is required.
+    """
+    if not use_api and not _api_key_present():
         st.error(
             "No GEMINI_API_KEY is set, so the system cannot generate an "
             "answer. Set it as an environment variable locally, or in the "
@@ -156,8 +200,15 @@ def _render_answer(question: str, collection) -> None:
         )
         return
 
-    with st.spinner("Retrieving and generating a grounded answer..."):
-        answer, pages, retrieved = answer_question(collection, question)
+    try:
+        with st.spinner("Retrieving and generating a grounded answer..."):
+            if use_api:
+                answer, pages, retrieved = _answer_via_api(question)
+            else:
+                answer, pages, retrieved = answer_question(collection, question)
+    except Exception as exc:  # noqa: BLE001 - surface API/pipeline errors
+        st.error(f"Could not get an answer: {exc}")
+        return
 
     if answer.strip().lower().startswith("i don't know"):
         st.warning(
@@ -182,7 +233,8 @@ def _render_answer(question: str, collection) -> None:
             st.write(r.get("text", ""))
             st.divider()
 
-def _query_ui(collection, key_prefix: str, show_examples: bool = True) -> None:
+def _query_ui(collection, key_prefix: str, show_examples: bool = True,
+              use_api: bool = False) -> None:
     """Shared question UI (example buttons + free-text) used by both modes."""
     clicked = None
     if show_examples:
@@ -201,14 +253,23 @@ def _query_ui(collection, key_prefix: str, show_examples: bool = True) -> None:
             st.info("Type a question above (or pick an example) first.")
 
     if clicked:
-        _render_answer(clicked, collection)
+        _render_answer(clicked, collection, use_api=use_api)
 
 def render_demo_mode() -> None:
-    """Bundled-policy demo: query the pre-built SAMPLE-policy index."""
+    """Bundled-policy demo: query the pre-built SAMPLE-policy index.
+
+    If INSURANCE_RAG_API_URL is set, questions are answered by the FastAPI
+    backend over HTTP and no local index/key is needed. Otherwise the on-disk
+    demo index is opened and queried in-process.
+    """
     st.info(
         "Demo mode uses a pre-built index of a published, SAMPLE-watermarked "
         "policy (Manulife FlexCare). It is a stand-in for development only."
     )
+
+    if API_URL:
+        _query_ui(None, key_prefix="demo", show_examples=True, use_api=True)
+        return
 
     if not os.path.isdir(DEMO_INDEX_DIR):
         st.error(
