@@ -1,7 +1,7 @@
 # Project Context & Handoff — Insurance-Policy-RAG
 
 > Working notes so development can resume cleanly after a break or a closed tab.
-> Last updated: 2026-08-07. All development happens on the `new_dev` branch.
+> Last updated: 2026-08-10. All development happens on the `new_dev` branch.
 
 ## What this project is
 
@@ -138,3 +138,16 @@ Streamlit repoint: when `INSURANCE_RAG_API_URL` is set, demo mode POSTs to `{url
 Not done yet (user-side): actual deployment of the backend to a free-tier host and pointing the Streamlit app at it. Both are account/hosting actions. Backend and app both verified to import/start locally; end-to-end HTTP path exercised via `/docs` / curl is recommended before deploying.
 
 Roadmap status: Days 1-9 COMPLETE. This was the last planned build day; remaining work is deployment + any polish/tuning.
+
+
+## Paused — 2026-08-10 (Day 9 merged + deployed)
+
+PR #10 (Day 9 — FastAPI backend + optional Streamlit API mode) was MERGED to master, so all of Days 1–9 are now on the default branch. Days 1–9 COMPLETE.
+
+Deployment DONE: the Streamlit app is live on Streamlit Community Cloud, deployed in-process (single-tier). Deploy settings: repo arashshams/Insurance-Policy-RAG, branch master, entry point app/streamlit_app.py, Python 3.11, GEMINI_API_KEY set via Settings -> Secrets in TOML form (GEMINI_API_KEY = "..."). INSURANCE_RAG_API_URL is intentionally LEFT UNSET, so the app runs the pipeline in-process and loads the committed app/demo_index/ at startup with no embedding calls (free-tier friendly; no Gemini quota spent until a question is asked).
+
+Architecture decision (single-tier over two-tier): for a personal free-tier project, standing up the separate FastAPI service adds operational overhead (a second host to keep alive, cold starts, more surfaces to break) without relaxing the real ceiling — the Gemini free-tier quota is tied to the API key, not the process architecture. The Day-9 API work stays in the repo and remains a one-env-var flip (INSURANCE_RAG_API_URL) if a two-tier / portfolio "live API" showcase is ever wanted.
+
+Deploy gotcha hit + fixed: Streamlit showed a repeated "Error parsing secrets file at .../.streamlit/secrets.toml" on the front page. Cause was malformed TOML in the Secrets box (copy-paste formatting — e.g. smart quotes / wrong format), NOT a missing or wrong key. Fix: re-paste the key as valid one-line TOML with straight double quotes (GEMINI_API_KEY = "your-key"). Errors cleared on the next rerun.
+
+Remaining (all optional): (1) end-to-end smoke test on the live host — an in-scope question returns a page-cited answer, an out-of-scope question returns the "I don't know" abstention, and upload mode builds a per-session in-memory index without error; (2) only if a portfolio "live API" showcase is desired, deploy the FastAPI backend separately (Render / HF Spaces) and point Streamlit at it via INSURANCE_RAG_API_URL. Roadmap Days 1–9 COMPLETE; project is effectively shipped.
