@@ -96,46 +96,44 @@ from src.rag_pipeline import (
 
 st.title("Insurance-Policy-RAG")
 st.caption(
-    "Ask natural-language questions about an insurance policy. Answers are "
-    "grounded in the document, cited by page, and abstain when the policy "
-    "doesn't cover the question."
+    "Ask questions about an insurance policy in plain English and get "
+    "answers straight from the document — with the page number to back "
+    "it up. If the policy doesn't say, you'll get an honest \"I don't "
+    "know\" instead of a guess."
 )
 
 with st.expander("How it works"):
     st.markdown(
-        "1. Your question is embedded and matched against the policy's "
-        "indexed passages (semantic retrieval).\n"
-        "2. Only passages above a similarity threshold are kept, so "
-        "off-topic questions retrieve nothing.\n"
-        "3. The answer is generated **strictly from those passages** and "
-        "each claim is cited by page.\n"
-        "4. If nothing relevant is retrieved, the system says "
-        "*\"I don't know\"* rather than guessing."
+        "1. Ask a question, just like you would ask a person.\n"
+        "2. The app finds the parts of the policy that actually answer "
+        "it.\n"
+        "3. It writes an answer using only what's in those parts, and "
+        "tells you which page(s) it came from.\n"
+        "4. If the policy doesn't cover your question, it says so "
+        "instead of making something up."
     )
 
 # --- Sidebar: mode selection ------------------------------------------------
 with st.sidebar:
-    st.header("Mode")
+    st.header("Get started")
     mode = st.radio(
-        "Choose how to run:",
+        "Which policy do you want to ask about?",
         options=("Bundled-policy demo", "Upload my own policy"),
         index=0,
         help=(
-            "Demo loads a pre-built index of a published SAMPLE policy. "
-            "Upload builds a private, per-session index from your PDF that "
-            "is never stored."
+            "Try the sample policy to see how it works, or upload your "
+            "own PDF. Your uploaded file is only used for this session "
+            "and is never saved."
         ),
     )
     st.divider()
     if API_URL:
         st.caption(f"Demo served by API: {API_URL}")
     elif _api_key_present():
-        st.caption("API key detected.")
+        st.caption("Ready to answer questions.")
     else:
-        st.caption("No GEMINI_API_KEY set - answers will be unavailable.")
-    st.caption(
-        "Runs on the Gemini free tier. Not legal or financial advice."
-    )
+        st.caption("No API key set yet — answers won't work until one is added.")
+    st.caption("Free to use. Not legal or financial advice.")
 
 @st.cache_resource(show_spinner=False)
 def _load_demo_collection(index_dir: str):
@@ -212,9 +210,9 @@ def _render_answer(question: str, collection, use_api: bool = False) -> None:
 
     if answer.strip().lower().startswith("i don't know"):
         st.warning(
-            "**I don't know.** The passages retrieved from the policy don't "
-            "cover this question, so the system abstains rather than guess. "
-            "Try rephrasing, or ask about something the policy addresses."
+            "**I don't know.** This policy doesn't seem to cover that, so "
+            "rather than guess, here's an honest answer. Try rephrasing, or "
+            "ask about something else in the document."
         )
         return
 
@@ -263,8 +261,9 @@ def render_demo_mode() -> None:
     demo index is opened and queried in-process.
     """
     st.info(
-        "Demo mode uses a pre-built index of a published, SAMPLE-watermarked "
-        "policy (Manulife FlexCare). It is a stand-in for development only."
+        "Trying the demo? These questions are answered from a sample "
+        "insurance policy (a public specimen document), just so you can "
+        "see the app in action before uploading your own."
     )
 
     if API_URL:
@@ -289,13 +288,13 @@ def render_demo_mode() -> None:
 def render_upload_mode() -> None:
     """User-upload: build a per-session, in-memory index from a PDF."""
     st.info(
-        "Upload a policy PDF to ask questions about it. The index is built "
-        "in memory for this session only and is never stored."
+        "Upload your policy as a PDF and ask away. Your file is used only "
+        "for this session — it's never saved or shared."
     )
 
-    uploaded = st.file_uploader("Policy PDF", type=["pdf"])
+    uploaded = st.file_uploader("Your policy (PDF)", type=["pdf"])
     if uploaded is None:
-        st.caption("Waiting for a PDF...")
+        st.caption("Upload a PDF above to get started.")
         return
 
     cache_key = f"{uploaded.name}:{uploaded.size}"
@@ -308,7 +307,7 @@ def render_upload_mode() -> None:
         st.error(f"Could not process this PDF: {exc}")
         return
 
-    st.success(f"Indexed '{uploaded.name}'. Ask a question below.")
+    st.success(f"Got it — '{uploaded.name}' is ready. Ask a question below.")
     _query_ui(collection, key_prefix="upload", show_examples=False)
 
 # --- Mode routing -----------------------------------------------------------
