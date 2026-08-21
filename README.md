@@ -1,6 +1,7 @@
 # Insurance-Policy-RAG
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/arashshams/Insurance-Policy-RAG/blob/new_dev/notebooks/03_insurance_policy_rag.ipynb)
+[![Try it live](https://img.shields.io/badge/Try%20it%20live-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://insurance-policy-rag.streamlit.app/)
 
 **A Retrieval-Augmented Generation (RAG) assistant that answers natural-language questions about a single insurance policy PDF — grounded in the document, cited by page, and honest enough to say "I don't know."**
 
@@ -9,6 +10,12 @@ Ask a question about your coverage; the system retrieves the most relevant passa
 ![Insurance-Policy-RAG workflow diagram](img/architecture.svg)
 
 ---
+
+## Live demo
+
+Try it now, no installation required: **[insurance-policy-rag.streamlit.app](https://insurance-policy-rag.streamlit.app/)**
+
+Ask questions against the bundled sample policy, or upload your own policy PDF — uploaded files are processed in memory for that session only and are never stored.
 
 ## Why this project
 
