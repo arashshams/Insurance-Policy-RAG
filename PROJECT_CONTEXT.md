@@ -1,7 +1,7 @@
 # Project Context & Handoff — Insurance-Policy-RAG
 
 > Working notes so development can resume cleanly after a break or a closed tab.
-> Last updated: 2026-08-10. All development happens on the `new_dev` branch.
+> Last updated: 2026-08-24. All development happens on the `new_dev` branch.
 
 ## What this project is
 
@@ -151,3 +151,17 @@ Architecture decision (single-tier over two-tier): for a personal free-tier proj
 Deploy gotcha hit + fixed: Streamlit showed a repeated "Error parsing secrets file at .../.streamlit/secrets.toml" on the front page. Cause was malformed TOML in the Secrets box (copy-paste formatting — e.g. smart quotes / wrong format), NOT a missing or wrong key. Fix: re-paste the key as valid one-line TOML with straight double quotes (GEMINI_API_KEY = "your-key"). Errors cleared on the next rerun.
 
 Remaining (all optional): (1) end-to-end smoke test on the live host — an in-scope question returns a page-cited answer, an out-of-scope question returns the "I don't know" abstention, and upload mode builds a per-session in-memory index without error; (2) only if a portfolio "live API" showcase is desired, deploy the FastAPI backend separately (Render / HF Spaces) and point Streamlit at it via INSURANCE_RAG_API_URL. Roadmap Days 1–9 COMPLETE; project is effectively shipped.
+
+## Paused — 2026-08-24 (public-readiness audit + polish, COMPLETE)
+
+Ran the smoke test called out above: in-scope question ("Is physiotherapy covered?") returned a correct, page-cited grounded answer on the live Streamlit Community Cloud app; the abstention and upload-mode paths were already verified working in earlier sessions. Re-confirmed again after the app went to sleep (free-tier inactivity) and was woken back up — same correct grounded answer came back once it finished loading. The only practical risk flagged: the free tier sleeps after inactivity, so it's worth waking the app right before sharing the link publicly (first load after a sleep takes ~30s).
+
+Front-page copy simplified: `app/streamlit_app.py` had its title/caption, "How it works" panel, sidebar labels, status captions, and info/warning banners rewritten in plain language (no RAG/technical jargon) so a non-technical user asking questions about their own documents isn't confronted with pipeline terminology. Committed to `new_dev` (`4472696`), merged to `master` via PR #12. README updated with a "Try it live" badge and a "Live demo" section linking to the app, committed to `new_dev` (`35afc0d`), merged to `master` via PR #13.
+
+Did a full audit for public-readiness (the repo is about to be shared/posted): reviewed `src/rag_pipeline.py` and `api/main.py` end to end (clean, no security issues), scanned the full git history for leaked secrets (none found — one initial regex pass falsely flagged base64 image blobs inside notebook diffs; re-scoped to exclude `.ipynb` files and confirmed clean), and reviewed every README/docs file (`README.md`, `app/README.md`, `api/README.md`, `data/README.md`, `LICENSE`).
+
+Cleanup landed as part of this pass: removed a duplicate `IDK_ANSWER = "I don't know"` definition in `rag_pipeline.py` (was defined twice, harmlessly); added `.Rhistory` and `.streamlit/secrets.toml` to `.gitignore` (the former defensively covers stray R-tool artifacts, the latter defensively covers the app's local secrets file even though nothing was ever actually committed there); removed the two stray, empty, tracked `.Rhistory` / `data/.Rhistory` files that had been sitting in git history since old unrelated commits; rewrote the README's "Roadmap" section, which had still listed the Streamlit MVP and FastAPI backend as upcoming work even though both have been live/shipped since Day 8–9 — it now says "Shipped" for both and lists only genuinely future ideas (multi-document support, query logging/metrics). Also added a repo description and topics/tags on GitHub for discoverability.
+
+Left alone by explicit maintainer instruction: the unrelated `scratch/worksafebc-case-study` branch stays as-is (not touched, not deleted) — it's a separate scratch project living in the same repo, not part of this audit.
+
+Status: all planned build days (1–9) plus this public-readiness pass are COMPLETE. The repo, live app, and documentation are considered ready to share/post. No open threads remain other than ordinary future enhancements (multi-document support, query logging, a possibly separately-hosted API) and the maintainer's own call on trimming this file's day-by-day tone for a public audience (left as-is per instruction — this file is intentionally kept, not dropped).
