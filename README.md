@@ -141,9 +141,9 @@ The single non-answer is **correct by design**: that question asks for a figure 
 
 ## Roadmap
 
-- **Streamlit MVP** importing `rag_pipeline.py` — a bundled-policy demo plus a user-upload mode (per-session, ephemeral index).
-- **FastAPI backend** exposing `POST /ask` over the same pipeline, with the app calling it over HTTP.
-- Multi-document support (policy + amendments) and query logging / metrics.
+**Shipped:** the Streamlit MVP (bundled-policy demo plus a user-upload mode with a per-session, ephemeral index) is live at the [demo link above](https://insurance-policy-rag.streamlit.app/), and a FastAPI backend exposing `POST /ask` over the same pipeline is in the repo (`api/`), ready to be wired in over HTTP.
+
+**Possible next steps:** multi-document support (policy + amendments) and query logging / metrics.
 
 ## Contributions
 
