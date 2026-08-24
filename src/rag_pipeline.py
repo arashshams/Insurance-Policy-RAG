@@ -349,8 +349,6 @@ def save_chunks(chunks, path=CHUNKS_PATH):
 # The collection is passed in explicitly so the same code serves both the
 # dev-persistent and the app-ephemeral index.
 
-IDK_ANSWER = "I don't know"
-
 RAG_SYSTEM_MESSAGE = """
 You are an assistant that answers employee insurance policy questions using only the provided context.
 Context will be provided between <Context> and </Context>.
