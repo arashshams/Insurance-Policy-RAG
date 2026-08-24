@@ -27,3 +27,9 @@ artifacts/
 # --- OS / editor cruft ---
 .DS_Store
 Thumbs.db
+
+# --- Streamlit secrets (defensive; should never be committed) ---
+.streamlit/secrets.toml
+
+# --- Stray R artifacts (not part of this project) ---
+.Rhistory
