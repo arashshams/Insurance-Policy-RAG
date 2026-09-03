@@ -113,7 +113,7 @@ answer, pages, retrieved = answer_question("Is physiotherapy covered?")
 ### Example questions
 
 - Is physiotherapy covered?
-- Are pre-authorizations required?
+- Is prior authorization required?
 - What expenses are excluded?
 
 ## Sample policy (for calibration)
