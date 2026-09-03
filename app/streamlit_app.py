@@ -81,10 +81,14 @@ DEMO_INDEX_DIR = os.environ.get(
     "DEMO_INDEX_DIR", str(REPO_ROOT / "app" / "demo_index")
 )
 
-# Example questions surfaced as one-click buttons in demo mode.
+# Example questions surfaced as one-click buttons in demo mode. Kept close to
+# the eval-calibrated wording (notebooks/eval/eval_questions.json) and the
+# policy's own terms - e.g. "prior authorization", not "pre-authorization"
+# (a phrase that doesn't appear in the document) - so every example button
+# reliably clears the retrieval threshold instead of abstaining.
 EXAMPLE_QUESTIONS = [
     "Is physiotherapy covered?",
-    "Are pre-authorizations required?",
+    "Is prior authorization required?",
     "What expenses are excluded?",
 ]
 
