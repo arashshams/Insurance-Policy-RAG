@@ -62,6 +62,14 @@ K_DEFAULT = int(os.environ.get("INSURANCE_RAG_K", "4"))
 # distances ~0.25-0.34, out-of-scope ~0.40-0.50; 0.37 cleanly separates them.
 DISTANCE_THRESHOLD = float(os.environ.get("INSURANCE_RAG_THRESHOLD", "0.37"))
 
+# Output-token budget for generation. On Gemini's OpenAI-compatible endpoint,
+# internal "thinking" tokens are drawn from this same budget (not billed
+# separately), so a low cap can silently truncate an answer before it's
+# written. Kept generous here; GEN_REASONING_EFFORT below additionally turns
+# thinking off outright on models that support it (harmless no-op otherwise).
+GEN_MAX_TOKENS = int(os.environ.get("INSURANCE_RAG_MAX_TOKENS", "1024"))
+GEN_REASONING_EFFORT = os.environ.get("INSURANCE_RAG_REASONING_EFFORT", "none")
+
 # --- Chunking parameters (calibrated; MUST match notebook to keep 0.37 valid) ---
 CHUNK_SIZE = int(os.environ.get("INSURANCE_RAG_CHUNK_SIZE", "800"))
 CHUNK_OVERLAP = int(os.environ.get("INSURANCE_RAG_CHUNK_OVERLAP", "128"))
@@ -422,28 +430,51 @@ def answer_question(collection, question, k=K_DEFAULT, model_name=GEN_MODEL):
     ]
 
     client = get_client()
-    retries = 0
-    sleep_time = QUERY_INITIAL_SLEEP
-    while True:
-        try:
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=prompt_messages,
-                temperature=0.0,
-                max_tokens=512,
-            )
-            break
-        except RateLimitError:
-            retries += 1
-            if retries > QUERY_MAX_RETRIES:
-                raise RuntimeError(
-                    f"Generation rate limit persists after {QUERY_MAX_RETRIES} "
-                    f"retries."
+    extra_body = {"reasoning_effort": GEN_REASONING_EFFORT} if GEN_REASONING_EFFORT else None
+
+    def _generate(max_tokens):
+        """One generation attempt, with the existing rate-limit retry/backoff."""
+        retries = 0
+        sleep_time = QUERY_INITIAL_SLEEP
+        while True:
+            try:
+                kwargs = dict(
+                    model=model_name,
+                    messages=prompt_messages,
+                    temperature=0.0,
+                    max_tokens=max_tokens,
                 )
-            time.sleep(sleep_time)
-            sleep_time *= 2
+                if extra_body:
+                    kwargs["extra_body"] = extra_body
+                return client.chat.completions.create(**kwargs)
+            except RateLimitError:
+                retries += 1
+                if retries > QUERY_MAX_RETRIES:
+                    raise RuntimeError(
+                        f"Generation rate limit persists after {QUERY_MAX_RETRIES} "
+                        f"retries."
+                    )
+                time.sleep(sleep_time)
+                sleep_time *= 2
+
+    response = _generate(GEN_MAX_TOKENS)
+    finish_reason = getattr(response.choices[0], "finish_reason", None)
+
+    # A response can still get cut off mid-sentence if the model "thinks"
+    # through most of the budget before writing the visible answer. One retry
+    # with double the budget recovers the common case instead of the app
+    # silently shipping a truncated answer.
+    if finish_reason in ("length", "MAX_TOKENS") and GEN_MAX_TOKENS < 4096:
+        response = _generate(GEN_MAX_TOKENS * 2)
+        finish_reason = getattr(response.choices[0], "finish_reason", None)
 
     answer_text = response.choices[0].message.content.strip()
+
+    if finish_reason in ("length", "MAX_TOKENS"):
+        answer_text += (
+            "\n\n*(This answer may have been cut off before it finished — "
+            "try asking again or narrowing the question.)*"
+        )
 
     # 4) Extract page numbers for citation
     pages = sorted({
