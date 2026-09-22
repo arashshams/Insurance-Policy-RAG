@@ -81,15 +81,22 @@ DEMO_INDEX_DIR = os.environ.get(
     "DEMO_INDEX_DIR", str(REPO_ROOT / "app" / "demo_index")
 )
 
-# Example questions surfaced as one-click buttons in demo mode. Kept close to
-# the eval-calibrated wording (notebooks/eval/eval_questions.json) and the
-# policy's own terms - e.g. "prior authorization", not "pre-authorization"
-# (a phrase that doesn't appear in the document) - so every example button
-# reliably clears the retrieval threshold instead of abstaining.
+# Example questions surfaced as one-click buttons in demo mode.
+#
+# POLICY (adopted 2026-09-22, after the 2026-09-03 "pre-authorization" bug):
+# these must be verbatim entries from notebooks/eval/eval_questions.json's
+# in_scope set, not paraphrases. A friendlier paraphrase reads fine to a
+# human but its retrieval score is untested until someone happens to click
+# it in prod - which is exactly how the pre-authorization wording shipped
+# with a distance just over threshold and silently abstained. Pulling the
+# calibrated wording verbatim means every example button inherits the
+# eval harness's already-verified retrieval hit. tests/test_example_questions.py
+# enforces this (verbatim substring match) so a future edit can't drift again
+# without failing a plain, no-API-key-required test.
 EXAMPLE_QUESTIONS = [
-    "Is physiotherapy covered?",
-    "Is prior authorization required?",
-    "What expenses are excluded?",
+    "Is physiotherapy covered under paramedical services?",
+    "When is a Prior Authorization form needed?",
+    "What expenses are excluded from health care benefits?",
 ]
 
 from src.rag_pipeline import (

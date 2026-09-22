@@ -1,7 +1,7 @@
 # Project Context & Handoff — Insurance-Policy-RAG
 
 > Working notes so development can resume cleanly after a break or a closed tab.
-> Last updated: 2026-08-24. All development happens on the `new_dev` branch.
+> Last updated: 2026-09-22. All development happens on the `new_dev` branch.
 
 ## What this project is
 
@@ -176,6 +176,16 @@ Ran a live smoke test against the deployed Streamlit app (not just the pipeline 
 
 Both fixes are narrow and additive: no change to `DISTANCE_THRESHOLD`, `K_DEFAULT`, chunking, or the retrieval/citation logic, and both new generation knobs are env-overridable (`INSURANCE_RAG_MAX_TOKENS`, `INSURANCE_RAG_REASONING_EFFORT`) consistent with the rest of the config block.
 
-All three fixes are committed to `new_dev`: `src/rag_pipeline.py` truncation fix (`fe27604`), `app/streamlit_app.py` example-question wording fix (`1e96754`), and the matching `README.md` wording fix (`559cdc4`). Not merged to `master` yet (maintainer's call, per the repo's established convention) — the live Streamlit app deploys from `master`, so these fixes won't reach production until that merge happens.
+All three fixes are committed to `new_dev`: `src/rag_pipeline.py` truncation fix (`fe27604`), `app/streamlit_app.py` example-question wording fix (`1e96754`), and the matching `README.md` wording fix (`559cdc4`). **Correction (2026-09-22):** this section originally said these were not yet merged to `master`. They were — PR #15 merged `new_dev` -> `master` the same day (`75537dd`), so all three fixes have been live in production since 2026-09-03. The note above was just never updated after the merge; leaving this correction here instead of silently editing history.
 
-Not done yet: re-running `04_evaluation.ipynb` against the actual shipped 38-chunk demo index to confirm the eval numbers (100%/100%/7-8) still hold there rather than only against the original 37-chunk Colab index — the two indices have never actually been reconciled. Also worth eventually deciding on a policy for the `Streamlit app` and `README` example questions to always be a subset of `eval_questions.json`, so this class of bug (an untested UI paraphrase) can't recur silently.
+Not done yet: re-running `04_evaluation.ipynb` against the actual shipped 38-chunk demo index to confirm the eval numbers (100%/100%/7-8) still hold there rather than only against the original 37-chunk Colab index — the two indices have never actually been reconciled. This still needs a `GEMINI_API_KEY` and is deferred to the maintainer to run.
+
+## Paused — 2026-09-22 (live-app smoke test + example-question policy, DONE)
+
+Did a manual, from-the-browser smoke test of the actual deployed app (not just the pipeline) against `master`/production: the physiotherapy example returned a correct, page-cited grounded answer; the "What expenses are excluded?" example (the one that used to truncate mid-sentence per the 2026-09-03 fix) now returns a complete, uncut, cited answer; an out-of-scope question ("What is the maximum speed limit on the highway?") correctly triggered the "I don't know" abstention copy; and the upload-your-own-policy mode renders correctly with its privacy note intact. No issues found — the 2026-09-03 fixes are confirmed working in production, not just in code.
+
+Adopted the policy flagged as outstanding above: the three example questions in `app/streamlit_app.py` (`EXAMPLE_QUESTIONS`) and the matching "Example questions" list in `README.md` are now verbatim entries from `notebooks/eval/eval_questions.json`'s `in_scope` set (`in_01`, `in_03`, `in_04`) rather than friendlier paraphrases — this is exactly the class of bug the 2026-09-03 "pre-authorization" incident was. Added `tests/test_example_questions.py`, a dependency-free test (parses `EXAMPLE_QUESTIONS` via `ast`, no Streamlit import, no API key needed) that fails if a future edit reintroduces an untested paraphrase. Verified it both passes on the current wording and correctly fails when fed the old paraphrased wording.
+
+Note this is a necessary-but-not-sufficient guardrail: it guarantees the example questions match calibrated eval wording, not that the *currently shipped* 38-chunk index still retrieves them correctly (that's still the deferred `04_evaluation.ipynb` rerun above). Since the wording now matches questions the eval harness has verified on the 37-chunk Colab index, and the two indices differ by only ~1 chunk on the same settings, risk is low — but it is not the same guarantee as an eval rerun on the actual production index.
+
+Remaining open item, deferred to the maintainer (needs `GEMINI_API_KEY`, not available in the assistant's environment): re-run `04_evaluation.ipynb` against the shipped `app/demo_index/` (38 chunks) to formally confirm the 100%/100%/7-8 eval numbers hold on the exact index in production, not just the original 37-chunk Colab calibration index.
