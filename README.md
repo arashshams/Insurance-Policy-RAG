@@ -112,9 +112,11 @@ answer, pages, retrieved = answer_question("Is physiotherapy covered?")
 
 ### Example questions
 
-- Is physiotherapy covered?
-- Is prior authorization required?
-- What expenses are excluded?
+These are the exact wordings from the calibration eval set (`notebooks/eval/eval_questions.json`), also used as the app's one-click example buttons — verbatim, not paraphrased, per the policy in `app/streamlit_app.py`:
+
+- Is physiotherapy covered under paramedical services?
+- When is a Prior Authorization form needed?
+- What expenses are excluded from health care benefits?
 
 ## Sample policy (for calibration)
 
