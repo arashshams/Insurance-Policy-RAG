@@ -1,7 +1,7 @@
 # Project Context & Handoff — Insurance-Policy-RAG
 
 > Working notes so development can resume cleanly after a break or a closed tab.
-> Last updated: 2026-09-22. All development happens on the `new_dev` branch.
+> Last updated: 2026-09-24. All development happens on the `new_dev` branch.
 
 ## What this project is
 
@@ -69,7 +69,7 @@ policy PDF is never committed (privacy).
 
 ## How to resume
 
-1. Read this file. 2. `git checkout new_dev`. 3. Day-5 calibration is DONE. Next actionable step is **Day 6**: refactor the notebook pipeline into a plain `rag_pipeline.py` module (single shared config block) exposing index-building as a callable parameterized by PDF source (NOT hard-wired to the Drive path) so the app can do runtime uploads. If you need to re-run notebooks, apply the Colab env recipe below, remount Drive, then run in order.
+1. Read this file (the most recent "Paused" section at the bottom is the current state). 2. `git checkout new_dev`. 3. Run the offline tests: `pytest tests/` (no API key needed). 4. If you need to re-verify quality, run `python -m src.evaluate` with `GEMINI_API_KEY` set — it evaluates the shipped pipeline on the shipped `app/demo_index/`. Notebooks are only needed for re-calibration; if you re-run them in Colab, apply the env recipe below, remount Drive, then run in order.
 
 ## Paused — 2026-07-28 (resume recipe)
 
@@ -189,3 +189,15 @@ Adopted the policy flagged as outstanding above: the three example questions in 
 Note this is a necessary-but-not-sufficient guardrail: it guarantees the example questions match calibrated eval wording, not that the *currently shipped* 38-chunk index still retrieves them correctly (that's still the deferred `04_evaluation.ipynb` rerun above). Since the wording now matches questions the eval harness has verified on the 37-chunk Colab index, and the two indices differ by only ~1 chunk on the same settings, risk is low — but it is not the same guarantee as an eval rerun on the actual production index.
 
 Remaining open item, deferred to the maintainer (needs `GEMINI_API_KEY`, not available in the assistant's environment): re-run `04_evaluation.ipynb` against the shipped `app/demo_index/` (38 chunks) to formally confirm the 100%/100%/7-8 eval numbers hold on the exact index in production, not just the original 37-chunk Colab calibration index.
+
+## Paused — 2026-09-24 (completeness review: upload-isolation bug, eval harness on shipped code, tests + CI)
+
+A completeness review against this file found the project functionally shipped but with one real bug and one structural gap, both now fixed on `new_dev`:
+
+1. **Upload mode was not isolated between users (bug, fixed).** Every `chromadb.EphemeralClient()` in a process shares ONE in-memory store (verified against the pinned chromadb 0.4.24), and Streamlit Community Cloud serves all visitors from one process. `build_index_from_pdf` always deleted+recreated the fixed collection name `insurance_policy_cvdb`, so user B's upload deleted user A's index (A's next question errored); the same happened to a single user switching between two files. The app also cached uploads with `st.cache_resource`, which is shared across ALL sessions, not per session. Fix: the in-memory path now defaults to a unique `upload_<uuid>` collection per build (dev/persistent path still uses `COLLECTION_NAME` with clean rebuild); the app keeps the upload's collection in `st.session_state` keyed on a SHA-256 of the file, and frees the previous one via the new `drop_collection()` when the session uploads a different file. Remaining known limitation: an abandoned session's in-memory index lingers until the process restarts (Streamlit 1.37 has no session-end hook).
+2. **The eval harness did not test the shipped code (gap, fixed).** NB04 ran against NB03's own copy of the pipeline (still `max_tokens=512`, Drive paths), so the deferred "re-run eval on the shipped 38-chunk index" could not actually be done as-is. The harness now lives in `src/evaluate.py` (importable + CLI: `python -m src.evaluate`, default index `app/demo_index/`) and calls `src/rag_pipeline.answer_question` directly; NB04 is rewritten as a thin runner over it. The result cache is now keyed on question text + index + model + threshold + k (it was keyed on id only, so a reworded question like in_02 would silently reuse a stale answer).
+3. **Smaller fixes:** `_read_api_key()` now accepts `GOOGLE_API_KEY` as well (the app and API already treated it as valid, so `/health` could say "key present" while every `/ask` failed); `answer_question()` returns the IDK abstention instead of crashing when the model returns empty/`None` content (e.g. a safety block); Chroma anonymous telemetry is disabled via shared client settings; the README programmatic-use snippet was wrong (`answer_question` needs the collection; `build_index_from_pdf` returns `(collection, chunks)`) and is corrected; README now states 37 (Colab) vs 38 (shipped) chunks and that in_02 has been reworded since the 7/8 run.
+4. **Tests + CI:** added `tests/test_pipeline_offline.py` (fake embeddings/LLM, no key or network): upload isolation, dev-path naming, key alias, empty-content abstention, threshold short-circuit, page citations, eval metrics + cache invalidation, demo index opens (3072-dim; opens a temp copy because Chroma rewrites HNSW files on open), and the API `/health` + `/ask` contract. Verified the isolation, key-alias and empty-content tests FAIL on the previous code. Added `.github/workflows/tests.yml` running `pytest tests/` on Python 3.11 for pushes to `master`/`new_dev` and PRs. 11/11 pass locally.
+
+**Still open (needs `GEMINI_API_KEY`, maintainer to run):** `python -m src.evaluate` against the shipped `app/demo_index/` to refresh the README numbers (100%/100%/7-8 are still the 37-chunk Colab results, and in_02 was reworded since). Update the README table with whatever it reports.
+
