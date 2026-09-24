@@ -16,7 +16,11 @@ the [top-level README](../README.md) and `PROJECT_CONTEXT.md`.
   SAMPLE-watermarked Manulife FlexCare document used as a development stand-in.
 - **Upload my own policy** — builds a per-session, in-memory (ephemeral) index
   from an uploaded PDF. Nothing is written to disk and nothing is persisted
-  across sessions (privacy by design).
+  across sessions (privacy by design). Each upload gets its own uniquely named
+  collection held in that browser session's `st.session_state`, so concurrent
+  visitors on the same app process can't see or delete each other's index;
+  a session's previous upload is freed when it uploads a new file. (An
+  abandoned session's index stays in process memory until the app restarts.)
 
 ## Run locally
 
