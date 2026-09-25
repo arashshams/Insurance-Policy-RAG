@@ -100,8 +100,10 @@ EXAMPLE_QUESTIONS = [
 ]
 
 from src.rag_pipeline import (
+    IDK_ANSWER,
     answer_question,
     build_index_from_pdf,
+    drop_collection,
     load_persistent_collection,
 )
 
@@ -155,18 +157,30 @@ def _load_demo_collection(index_dir: str):
     """
     return load_persistent_collection(persist_dir=index_dir)
 
-@st.cache_resource(show_spinner=False)
-def _build_uploaded_collection(file_bytes: bytes, cache_key: str):
-    """Build an in-memory ephemeral index from uploaded PDF bytes (cached).
+def _get_uploaded_collection(file_bytes: bytes, file_name: str):
+    """Return this session's in-memory index for the uploaded PDF.
 
     persist_dir is None, so rag_pipeline uses an EphemeralClient and writes
-    NOTHING to disk. Cached on (name, size) so we embed once per uploaded
-    file per session instead of on every rerun (saves free-tier quota).
-    The returned tuple's chunks are unused here but kept for parity.
+    NOTHING to disk. The index is kept in st.session_state (per browser
+    session) - NOT st.cache_resource, which is shared by every visitor of
+    the app process. Each build gets a unique collection name, so one user's
+    upload can never delete or touch another user's index. We embed once per
+    uploaded file per session (keyed on a content hash) and free the previous
+    upload's collection when the user switches files.
     """
+    import hashlib
+
+    digest = hashlib.sha256(file_bytes).hexdigest()
+    current = st.session_state.get("upload_index")
+    if current and current["digest"] == digest:
+        return current["collection"]
+
     collection, _chunks = build_index_from_pdf(
-        io.BytesIO(file_bytes), persist_dir=None, source_name=cache_key
+        io.BytesIO(file_bytes), persist_dir=None, source_name=file_name
     )
+    if current:
+        drop_collection(current["collection"])
+    st.session_state["upload_index"] = {"digest": digest, "collection": collection}
     return collection
 
 def _answer_via_api(question: str):
@@ -219,7 +233,7 @@ def _render_answer(question: str, collection, use_api: bool = False) -> None:
         st.error(f"Could not get an answer: {exc}")
         return
 
-    if answer.strip().lower().startswith("i don't know"):
+    if answer.strip().lower().startswith(IDK_ANSWER.lower()):
         st.warning(
             "**I don't know.** This policy doesn't seem to cover that, so "
             "rather than guess, here's an honest answer. Try rephrasing, or "
@@ -308,11 +322,10 @@ def render_upload_mode() -> None:
         st.caption("Upload a PDF above to get started.")
         return
 
-    cache_key = f"{uploaded.name}:{uploaded.size}"
     try:
         with st.spinner("Embedding your policy (one-time per upload)..."):
-            collection = _build_uploaded_collection(
-                uploaded.getvalue(), cache_key
+            collection = _get_uploaded_collection(
+                uploaded.getvalue(), uploaded.name
             )
     except Exception as exc:  # noqa: BLE001 - surface build errors to the user
         st.error(f"Could not process this PDF: {exc}")

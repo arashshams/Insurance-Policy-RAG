@@ -104,7 +104,10 @@ def _read_api_key() -> str:
       2. Colab Secrets (userdata) as a fallback when running in Colab.
     google.colab is imported lazily so this module has no hard Colab dependency.
     """
-    key = os.environ.get("GEMINI_API_KEY")
+    # GOOGLE_API_KEY is accepted as an alias because the app and API treat it
+    # as a valid key; reading only GEMINI_API_KEY here made /health report
+    # "key present" while every /ask failed.
+    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if key:
         return key
     try:
@@ -115,7 +118,7 @@ def _read_api_key() -> str:
     except Exception:
         pass
     raise RuntimeError(
-        "No Gemini API key found. Set the GEMINI_API_KEY environment variable "
+        "No Gemini API key found. Set the GEMINI_API_KEY (or GOOGLE_API_KEY) environment variable "
         "(or add it to Colab Secrets when running in Colab)."
     )
 
@@ -273,28 +276,56 @@ def chunk_pages(pages, source_name="policy.pdf"):
     return chunks
 
 
+def _chroma_settings():
+    """Shared Chroma settings. Anonymous telemetry is OFF: this project avoids
+    sending anything about user documents/usage to third parties by default.
+    (All clients in a process must use identical settings, hence one helper.)"""
+    from chromadb.config import Settings
+
+    return Settings(anonymized_telemetry=False)
+
+
 def _get_chroma_client(persist_dir):
-    """Return a Chroma client: Persistent when a dir is given, else Ephemeral."""
+    """Return a Chroma client: Persistent when a dir is given, else Ephemeral.
+
+    NOTE: every EphemeralClient in a process shares ONE in-memory store. On a
+    multi-user host (e.g. Streamlit Community Cloud, one process for all
+    visitors) that means collection names are global, so the app path must
+    use a unique collection name per upload (see build_index_from_pdf).
+    """
     import chromadb
 
     if persist_dir:
         os.makedirs(persist_dir, exist_ok=True)
-        return chromadb.PersistentClient(path=persist_dir)
-    return chromadb.EphemeralClient()
+        return chromadb.PersistentClient(path=persist_dir, settings=_chroma_settings())
+    return chromadb.EphemeralClient(settings=_chroma_settings())
 
 
 def build_index_from_pdf(source, persist_dir=None,
-                         collection_name=COLLECTION_NAME,
+                         collection_name=None,
                          source_name="policy.pdf"):
     """Build a Chroma collection from a PDF and return (collection, chunks).
 
     persist_dir=None  -> in-memory (shipped-app path, nothing persisted)
     persist_dir=<str> -> on-disk PersistentClient (dev path)
 
-    The collection is deleted+recreated for a clean, reproducible rebuild.
+    collection_name:
+      * dev path: defaults to COLLECTION_NAME; the collection is
+        deleted+recreated for a clean, reproducible rebuild.
+      * app path: defaults to a fresh unique name per call. The in-memory
+        store is shared by every session in the process, so a fixed name
+        would let one user's upload delete another user's index.
     Embeddings are produced by embed_texts() (Section 2), so the vector space
     matches retrieval exactly and the 0.37 threshold stays valid.
     """
+    if collection_name is None:
+        if persist_dir:
+            collection_name = COLLECTION_NAME
+        else:
+            import uuid
+
+            collection_name = f"upload_{uuid.uuid4().hex}"
+
     pages = extract_pages(source)
     chunks = chunk_pages(pages, source_name=source_name)
     if not chunks:
@@ -328,8 +359,26 @@ def load_persistent_collection(persist_dir=PERSIST_DIR,
     """Dev fast-path: reopen an existing on-disk index without re-embedding."""
     import chromadb
 
-    client = chromadb.PersistentClient(path=persist_dir)
+    client = chromadb.PersistentClient(path=persist_dir, settings=_chroma_settings())
     return client.get_collection(collection_name)
+
+
+def drop_collection(collection) -> None:
+    """Free an app-path (in-memory) collection once it is no longer needed.
+
+    Safe to call on an already-deleted collection. Used by the app when a
+    session replaces its upload, so old documents don't linger in memory.
+    """
+    if collection is None:
+        return
+    import chromadb
+
+    try:
+        chromadb.EphemeralClient(settings=_chroma_settings()).delete_collection(
+            collection.name
+        )
+    except Exception:
+        pass
 
 
 def save_chunks(chunks, path=CHUNKS_PATH):
@@ -468,7 +517,12 @@ def answer_question(collection, question, k=K_DEFAULT, model_name=GEN_MODEL):
         response = _generate(GEN_MAX_TOKENS * 2)
         finish_reason = getattr(response.choices[0], "finish_reason", None)
 
-    answer_text = response.choices[0].message.content.strip()
+    # content can be None (e.g. a safety block or an empty completion);
+    # treat that as an abstention rather than crashing on .strip().
+    content = response.choices[0].message.content
+    if not content or not content.strip():
+        return IDK_ANSWER, [], retrieved
+    answer_text = content.strip()
 
     if finish_reason in ("length", "MAX_TOKENS"):
         answer_text += (

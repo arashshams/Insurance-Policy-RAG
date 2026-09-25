@@ -98,14 +98,16 @@ requirements.txt
 2. Provide a Gemini API key (free-tier eligible) via your environment.
 3. Place your policy PDF in `data/documents/` (optionally set `INSURANCE_RAG_ROOT`).
 4. Run the notebooks in order (01 -> 02 -> 03), or import `src/rag_pipeline.py` directly and call `build_index_from_pdf(...)` then `answer_question(...)`.
+5. Run the offline test suite (no API key needed): `pytest tests/`
 
 ### Programmatic use
 
 ```python
 from src.rag_pipeline import build_index_from_pdf, answer_question
 
-build_index_from_pdf("data/documents/policy.pdf")
-answer, pages, retrieved = answer_question("Is physiotherapy covered?")
+# persist_dir=None builds an in-memory index; pass a path to persist it on disk.
+collection, chunks = build_index_from_pdf("data/documents/policy.pdf")
+answer, pages, retrieved = answer_question(collection, "Is physiotherapy covered?")
 ```
 
 `answer_question` returns the answer text, the cited pages, and the retrieved passages — or `("I don't know", [], [])` when nothing clears the threshold.
@@ -120,11 +122,11 @@ These are the exact wordings from the calibration eval set (`notebooks/eval/eval
 
 ## Sample policy (for calibration)
 
-Calibration and the numbers below were produced against a published, SAMPLE-watermarked medical contract (Manulife FlexCare, 32 pages), which ingestion splits into **37 chunks**. This document is only a stand-in for development; the real policy PDF is never committed. Answers are valid only for users covered by the same policy the index was built from.
+Calibration and the numbers below were produced against a published, SAMPLE-watermarked medical contract (Manulife FlexCare, 32 pages), which ingestion splits into **37 chunks** on the original Colab environment (the shipped demo index at `app/demo_index/`, built locally with the same settings, has **38** — the ±1 comes from tokenizer/PDF-extractor versions). This document is only a stand-in for development; the real policy PDF is never committed. Answers are valid only for users covered by the same policy the index was built from.
 
 ## Evaluation (the quality story)
 
-The pipeline is validated end-to-end on the free tier using an evaluation harness (`04_evaluation.ipynb`) over a question set of 8 in-scope and 4 out-of-scope questions. Metrics cover the guardrail (out-of-scope abstention), retrieval quality (in-scope hit rate), and answer quality (in-scope answer-keyword rate).
+The pipeline is validated end-to-end on the free tier using an evaluation harness (`src/evaluate.py`, with `04_evaluation.ipynb` as a notebook runner) over a question set of 8 in-scope and 4 out-of-scope questions. Metrics cover the guardrail (out-of-scope abstention), retrieval quality (in-scope hit rate), and answer quality (in-scope answer-keyword rate).
 
 | Metric | Result |
 |---|---|
@@ -132,7 +134,16 @@ The pipeline is validated end-to-end on the free tier using an evaluation harnes
 | In-scope retrieval hit rate | **100%** |
 | In-scope questions answered | **7 / 8** |
 
-The single non-answer is **correct by design**: that question asks for a figure that lives in a separate Schedule of Benefits, not in this policy document, so the system abstains rather than guess. Evaluation runs are sequential and paced to stay within free-tier limits, and no real policy facts are committed.
+These numbers come from the original calibration run on the 37-chunk Colab index. The single non-answer was **correct by design**: that question (`in_02`) originally asked for a figure that lives in a separate Schedule of Benefits, not in this policy document, so the system abstained rather than guess. `in_02` has since been reworded to ask about formulary coverage and exclusions, which the policy does cover.
+
+The harness evaluates the exact code and index the live app ships. To reproduce or refresh the numbers on the shipped 38-chunk demo index:
+
+```bash
+export GEMINI_API_KEY=...
+python -m src.evaluate            # defaults to app/demo_index/; cached in notebooks/eval/eval_results.json
+```
+
+Evaluation runs are sequential and paced to stay within free-tier limits, and no real policy facts are committed.
 
 ## Responsible AI
 
