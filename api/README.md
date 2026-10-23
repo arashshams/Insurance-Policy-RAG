@@ -13,8 +13,8 @@ Streamlit UI, see [app/README.md](../app/README.md).
 
 | Method | Path      | Purpose |
 | ------ | --------- | ------- |
-| GET    | `/health` | Readiness probe: service status, whether the demo index and an API key are present. Never calls the LLM. |
-| POST   | `/ask`    | Ask a question; returns a grounded, page-cited answer. |
+| GET    | `/health` | Readiness probe: service status, whether the demo index and an API key are present, and whether `/ask` requires a token. Never calls the LLM. Always open. |
+| POST   | `/ask`    | Ask a question; returns a grounded, page-cited answer. Requires a bearer token when `INSURANCE_RAG_API_TOKEN` is set. |
 
 Interactive docs are served by FastAPI at `/docs` (Swagger) and `/redoc`.
 
@@ -29,7 +29,7 @@ Request body:
 }
 ```
 
-- `question` (string, required) — the natural-language question.
+- `question` (string, required, 1-1000 characters by default) — the natural-language question.
 - `k` (int, optional, default 4, range 1-20) — how many chunks to retrieve.
 
 Response body:
@@ -37,17 +37,27 @@ Response body:
 ```json
 {
   "answer": "Yes. Physiotherapy is covered ...",
-  "pages": [7, 8],
+  "pages": [10],
   "abstained": false,
+  "citations_verified": true,
   "retrieved": [
-    {"id": "doc_12", "page": 7, "score": 0.28, "text": "..."}
+    {"id": "doc_9", "page": 10, "score": 0.28, "text": "..."}
   ]
 }
 ```
 
-- `abstained` is `true` when nothing passed the relevance threshold (the
-  answer is then "I don't know" and `retrieved` is empty). This is the
-  guardrail working as designed for out-of-scope questions.
+- `abstained` is `true` when the system said "I don't know": either nothing
+  passed the relevance threshold (then `retrieved` is empty and no LLM call
+  was made) or the model found no answer in the retrieved passages. It uses
+  the same `is_abstention` rule as the app and the evaluation harness. `pages`
+  is empty whenever `abstained` is `true`.
+- `pages` are the pages of the passages the model cited. If the model cited
+  none, `citations_verified` is `false` and `pages` lists the pages of every
+  retrieved passage instead.
+
+Errors: `401` missing/invalid token (when one is configured), `422` invalid
+body (e.g. an empty or too-long question), `429` rate limited (honor the
+`Retry-After` header), `502` pipeline error, `503` no API key or no index.
 
 ## Run locally
 
@@ -64,8 +74,14 @@ Then, in another shell:
 ```bash
 curl localhost:8000/health
 
-curl -X POST localhost:8000/ask \\
-  -H "content-type: application/json" \\
+curl -X POST localhost:8000/ask \
+  -H "content-type: application/json" \
+  -d '{"question": "Is physiotherapy covered?"}'
+
+# if INSURANCE_RAG_API_TOKEN is set on the server:
+curl -X POST localhost:8000/ask \
+  -H "content-type: application/json" \
+  -H "Authorization: Bearer $INSURANCE_RAG_API_TOKEN" \
   -d '{"question": "Is physiotherapy covered?"}'
 ```
 
@@ -75,6 +91,15 @@ All configuration is via environment variables (the pipeline reads them too):
 
 - `GEMINI_API_KEY` (required) — key for embeddings + generation. Without it,
   `/ask` returns HTTP 503 and `/health` reports `api_key_present: false`.
+- `INSURANCE_RAG_API_TOKEN` (optional, **strongly recommended when public**) —
+  if set, `/ask` requires `Authorization: Bearer <token>`. Without it, anyone
+  who finds the URL can spend your Gemini quota. If the Streamlit app calls
+  the API, give it the same value (it sends the header automatically).
+- `INSURANCE_RAG_API_RATE_PER_CLIENT` / `INSURANCE_RAG_API_RATE_GLOBAL`
+  (optional, default 10 / 60 requests per minute; `0` disables) — rate limits.
+  The per-client key is the connecting address; behind a reverse proxy that is
+  the proxy itself, so the per-client limit then acts as a second global limit.
+- `INSURANCE_RAG_MAX_QUESTION_CHARS` (optional, default 1000) — question length cap.
 - `DEMO_INDEX_DIR` (optional) — path to the pre-built Chroma index. Defaults
   to `app/demo_index/` in the repo.
 - `INSURANCE_RAG_GEN_MODEL` / `INSURANCE_RAG_THRESHOLD` / `INSURANCE_RAG_K`
@@ -93,7 +118,8 @@ General steps:
 
 1. Point the host at this repo and install `requirements.txt`.
 2. Start command: `uvicorn api.main:app --host 0.0.0.0 --port $PORT`.
-3. Set `GEMINI_API_KEY` as a secret/environment variable on the host.
+3. Set `GEMINI_API_KEY` and `INSURANCE_RAG_API_TOKEN` as secrets/environment
+   variables on the host.
 4. Ensure `app/demo_index/` ships with the deploy (it is committed to the repo).
 
 ## Notes

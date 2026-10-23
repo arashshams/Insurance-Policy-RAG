@@ -6,7 +6,7 @@ document, cited by page, and that abstain ("I don't know") when the policy does
 not cover the question.
 
 For the project as a whole (architecture, evaluation, pipeline interface), see
-the [top-level README](../README.md) and `PROJECT_CONTEXT.md`.
+the [top-level README](../README.md).
 
 ## Two modes
 
@@ -16,11 +16,34 @@ the [top-level README](../README.md) and `PROJECT_CONTEXT.md`.
   SAMPLE-watermarked Manulife FlexCare document used as a development stand-in.
 - **Upload my own policy** — builds a per-session, in-memory (ephemeral) index
   from an uploaded PDF. Nothing is written to disk and nothing is persisted
-  across sessions (privacy by design). Each upload gets its own uniquely named
-  collection held in that browser session's `st.session_state`, so concurrent
-  visitors on the same app process can't see or delete each other's index;
-  a session's previous upload is freed when it uploads a new file. (An
-  abandoned session's index stays in process memory until the app restarts.)
+  across sessions. Each upload gets its own uniquely named collection, tracked
+  in a process-wide registry (`src/guardrails.py`) and referenced by name from
+  that browser session's `st.session_state`, so concurrent visitors on the same
+  app process can't see or delete each other's index. A session's previous
+  upload is freed when it uploads a new file, and any upload left idle for
+  `INSURANCE_RAG_UPLOAD_TTL_MIN` minutes (default 30) is freed on the next
+  visit to the app, so abandoned sessions don't accumulate in memory. The
+  upload's text is sent to the Gemini API (see [Privacy](#privacy)), and
+  answers use `INSURANCE_RAG_UPLOAD_THRESHOLD` (defaults to the 0.37 that was
+  calibrated on the sample policy; the UI notes it may not fit other documents).
+
+## Cost controls
+
+Every question and upload spends the deployer's Gemini quota, so the app
+enforces limits (all environment variables / Secrets):
+
+| Limit | Default | Variable |
+| --- | --- | --- |
+| Upload size | 10 MB | `INSURANCE_RAG_MAX_UPLOAD_MB` (+ `server.maxUploadSize` in `.streamlit/config.toml`) |
+| Upload pages / chunks | 60 / 150 | `INSURANCE_RAG_MAX_UPLOAD_PAGES` / `INSURANCE_RAG_MAX_UPLOAD_CHUNKS` |
+| Questions per session / app-wide | 10 / 60 per minute | `INSURANCE_RAG_APP_Q_PER_SESSION` / `INSURANCE_RAG_APP_Q_GLOBAL` |
+| Uploads per session / app-wide | 3 / 30 per hour | `INSURANCE_RAG_APP_UPLOADS_PER_SESSION` / `INSURANCE_RAG_APP_UPLOADS_GLOBAL` |
+| Concurrent upload indexes | 20 | `INSURANCE_RAG_MAX_UPLOAD_INDEXES` |
+| Idle upload lifetime | 30 min | `INSURANCE_RAG_UPLOAD_TTL_MIN` |
+
+Oversized PDFs are rejected before any embedding call. Set a limit to `0` to
+disable it. Limits are per app process, which on Streamlit Community Cloud
+means per app.
 
 ## Run locally
 
@@ -53,8 +76,10 @@ Without a key, the UI still loads but answers are disabled (the sidebar shows a
    ```
 
    The app mirrors recognized secrets into environment variables at startup, so
-   `rag_pipeline`'s env-based config picks them up unchanged. `GOOGLE_API_KEY`
-   and `INSURANCE_RAG_ROOT` are also honored if present.
+   `rag_pipeline`'s env-based config picks them up unchanged. `GOOGLE_API_KEY`,
+   `INSURANCE_RAG_ROOT`, `INSURANCE_RAG_API_URL` and `INSURANCE_RAG_API_TOKEN`
+   (sent as a bearer token when the demo is served by the API) are also
+   honored if present.
 4. Deploy. Demo mode works immediately; upload mode works once a key is set.
 
 Locally, secrets are optional: the app only reads `st.secrets` when a
@@ -103,6 +128,13 @@ Notes:
 
 ## Privacy
 
-Uploaded PDFs are embedded in memory for the current session only and are never
-stored. The committed demo index is built solely from the published,
+Uploaded PDFs are never written to disk; their in-memory index is freed when
+the user switches files or after the idle TTL. To embed the policy and answer
+questions, however, the policy text and each question are sent to Google's
+Gemini API. On the Gemini free tier, Google may use submitted content to
+improve its products, and the upload screen tells users this before they
+upload. Use a paid-tier key, or don't offer upload mode, if real personal data
+is involved.
+
+The committed demo index is built solely from the published,
 SAMPLE-watermarked stand-in policy — no real policy contents are in the repo.
