@@ -60,7 +60,23 @@ K_DEFAULT = int(os.environ.get("INSURANCE_RAG_K", "4"))
 # Chunks whose distance exceeds this are treated as irrelevant (abstain).
 # Calibrated 2026-07-27 against the eval set (37-chunk index): in-scope
 # distances ~0.25-0.34, out-of-scope ~0.40-0.50; 0.37 cleanly separates them.
+# IMPORTANT: this value is calibrated on the bundled SAMPLE policy only. It is
+# not known to transfer to other documents; re-calibrate with
+# `python -m src.evaluate --pdf your_policy.pdf --questions your_questions.json`
+# (prints a suggested threshold) before relying on abstentions elsewhere.
 DISTANCE_THRESHOLD = float(os.environ.get("INSURANCE_RAG_THRESHOLD", "0.37"))
+
+# Threshold used for user-uploaded policies (uncalibrated documents). Defaults
+# to the demo value; override separately once you have calibrated your own.
+UPLOAD_DISTANCE_THRESHOLD = float(
+    os.environ.get("INSURANCE_RAG_UPLOAD_THRESHOLD", str(DISTANCE_THRESHOLD))
+)
+
+# --- Upload guardrails (cost control for the shared, public app) -------------
+# Hard caps on what an uploaded PDF may cost to embed.
+MAX_UPLOAD_MB = float(os.environ.get("INSURANCE_RAG_MAX_UPLOAD_MB", "10"))
+MAX_UPLOAD_PAGES = int(os.environ.get("INSURANCE_RAG_MAX_UPLOAD_PAGES", "60"))
+MAX_UPLOAD_CHUNKS = int(os.environ.get("INSURANCE_RAG_MAX_UPLOAD_CHUNKS", "150"))
 
 # Output-token budget for generation. On Gemini's OpenAI-compatible endpoint,
 # internal "thinking" tokens are drawn from this same budget (not billed
@@ -84,6 +100,29 @@ QUERY_INITIAL_SLEEP = float(os.environ.get("INSURANCE_RAG_INITIAL_SLEEP", "2.0")
 
 # Abstention answer returned when nothing relevant is retrieved
 IDK_ANSWER = "I don't know"
+
+
+def _normalize_answer(text: str) -> str:
+    """Lower-case, unify apostrophes/quotes, drop citation tags, trailing
+    punctuation and surrounding quotes, and collapse whitespace."""
+    import re
+
+    t = (text or "").replace("’", "'").replace("‘", "'")
+    t = re.sub(r"[\[(]\s*doc_\d+(?:\s*,\s*doc_\d+)*\s*[\])]", " ", t)
+    t = t.strip().strip("\"'`*_ ").rstrip(".!").strip("\"'`*_ ")
+    return " ".join(t.lower().split())
+
+
+def is_abstention(answer: str, idk: str = IDK_ANSWER) -> bool:
+    """The ONE definition of "the system abstained", shared by the app, the API
+    and the evaluation harness.
+
+    True only when the whole answer is the IDK string (tolerant of case,
+    curly apostrophes, quotes, trailing punctuation and stray citation tags).
+    An answer that merely *starts* with "I don't know ..." and then goes on to
+    say something is NOT an abstention: it contains content the user will read.
+    """
+    return _normalize_answer(answer) == _normalize_answer(idk)
 
 
 # ----------------------------------------------------------------------------
@@ -222,16 +261,27 @@ def _scramble_ratio(text: str) -> float:
     return bad / len(tokens)
 
 
-def extract_pages(source):
+class DocumentTooLargeError(ValueError):
+    """Raised when a PDF exceeds the configured page / chunk caps."""
+
+
+def extract_pages(source, max_pages=None):
     """Read a PDF and return a list of {"page": int, "text": str}.
 
     ``source`` may be a filesystem path (str/os.PathLike) OR a file-like /
     bytes object (as delivered by an upload widget). This keeps the same code
     path for dev (path on Drive) and the shipped app (uploaded bytes).
+
+    ``max_pages`` (optional) rejects longer documents BEFORE any text is
+    extracted or embedded, so an oversized upload costs nothing.
     """
     from pypdf import PdfReader
 
     reader = PdfReader(source)
+    if max_pages is not None and len(reader.pages) > max_pages:
+        raise DocumentTooLargeError(
+            f"This PDF has {len(reader.pages)} pages; the limit is {max_pages}."
+        )
     pages = []
     for i, page in enumerate(reader.pages):
         text = page.extract_text() or ""
@@ -303,11 +353,17 @@ def _get_chroma_client(persist_dir):
 
 def build_index_from_pdf(source, persist_dir=None,
                          collection_name=None,
-                         source_name="policy.pdf"):
+                         source_name="policy.pdf",
+                         max_pages=None,
+                         max_chunks=None):
     """Build a Chroma collection from a PDF and return (collection, chunks).
 
     persist_dir=None  -> in-memory (shipped-app path, nothing persisted)
     persist_dir=<str> -> on-disk PersistentClient (dev path)
+
+    max_pages / max_chunks (optional) cap what one document may cost to embed;
+    exceeding either raises DocumentTooLargeError before any embedding call.
+    The app passes MAX_UPLOAD_PAGES / MAX_UPLOAD_CHUNKS; dev builds pass None.
 
     collection_name:
       * dev path: defaults to COLLECTION_NAME; the collection is
@@ -326,10 +382,14 @@ def build_index_from_pdf(source, persist_dir=None,
 
             collection_name = f"upload_{uuid.uuid4().hex}"
 
-    pages = extract_pages(source)
+    pages = extract_pages(source, max_pages=max_pages)
     chunks = chunk_pages(pages, source_name=source_name)
     if not chunks:
         raise RuntimeError("No usable text extracted from the PDF.")
+    if max_chunks is not None and len(chunks) > max_chunks:
+        raise DocumentTooLargeError(
+            f"This PDF splits into {len(chunks)} chunks; the limit is {max_chunks}."
+        )
 
     client = _get_chroma_client(persist_dir)
 
@@ -407,10 +467,11 @@ def save_chunks(chunks, path=CHUNKS_PATH):
 # dev-persistent and the app-ephemeral index.
 
 RAG_SYSTEM_MESSAGE = """
-You are an assistant that answers employee insurance policy questions using only the provided context.
-Context will be provided between <Context> and </Context>.
-If the answer is not contained in the context, respond exactly with: \"I don't know\".
+You are an assistant that answers insurance policy questions using only the provided context.
+Context will be provided between <Context> and </Context>. Each passage starts with its id in square brackets, e.g. [doc_12].
+If the answer is not contained in the context, respond exactly with: \"I don't know\" and nothing else.
 Do not hallucinate. Provide concise, policy-grounded answers.
+After each sentence that uses the context, cite the id(s) of the passage(s) it came from in square brackets, e.g. [doc_12] or [doc_3, doc_7]. Cite only ids that appear in the context.
 """
 
 RAG_USER_TEMPLATE = """
@@ -423,14 +484,32 @@ RAG_USER_TEMPLATE = """
 </Question>
 """
 
+# Matches one citation group: [doc_3], [doc_3, doc_7] or the (doc_3) variant
+_CITATION_RE = _re.compile(r"[\[(]\s*(doc_\d+(?:\s*,\s*doc_\d+)*)\s*[\])]")
 
-def retrieve_top_k(collection, query, k=K_DEFAULT, threshold=DISTANCE_THRESHOLD):
-    """Return the k nearest chunks whose cosine distance <= threshold.
 
-    Results above the threshold are dropped, so an off-topic query returns an
-    empty list instead of forcing in irrelevant chunks. Each hit is a dict:
-    {"id", "text", "metadata", "score"}.
+def extract_citations(answer: str, valid_ids) -> tuple[str, list[str]]:
+    """Strip [doc_N] citation tags from an answer and return (clean_text, ids).
+
+    Only ids that were actually in the retrieved context are returned (a model
+    citing an id it was never shown is ignored). Order of first citation is
+    preserved; duplicates are removed.
     """
+    valid = set(valid_ids)
+    cited: list[str] = []
+    for group in _CITATION_RE.findall(answer or ""):
+        for _id in _re.split(r"\s*,\s*", group.strip()):
+            if _id in valid and _id not in cited:
+                cited.append(_id)
+    clean = _CITATION_RE.sub("", answer or "")
+    clean = _re.sub(r"[ \t]+([.,;:!?])", r"\1", clean)   # "covered ." -> "covered."
+    clean = _re.sub(r"[ \t]{2,}", " ", clean).strip()
+    return clean, cited
+
+
+def _query_chunks(collection, query, k=K_DEFAULT):
+    """Embed the query and return the k nearest chunks, UNFILTERED, as
+    {"id", "text", "metadata", "score"} dicts (score = cosine distance)."""
     q_emb = embed_query(query)
     results = collection.query(
         query_embeddings=[q_emb],
@@ -440,38 +519,86 @@ def retrieve_top_k(collection, query, k=K_DEFAULT, threshold=DISTANCE_THRESHOLD)
     ids = results["ids"][0]
     docs_text = results["documents"][0]
     metadatas = results["metadatas"][0]
-    distances = results.get("distances", [[]])[0]
+    distances = (results.get("distances") or [[]])[0]
 
     hits = []
     for idx, (_id, t, m) in enumerate(zip(ids, docs_text, metadatas)):
         score = float(distances[idx]) if distances else None
-        # keep only sufficiently-similar chunks (None score => keep, can't judge)
-        if score is None or score <= threshold:
-            hits.append({"id": _id, "text": t, "metadata": m, "score": score})
+        hits.append({"id": _id, "text": t, "metadata": m or {}, "score": score})
     return hits
 
 
-def answer_question(collection, question, k=K_DEFAULT, model_name=GEN_MODEL):
-    """Retrieve grounded context and generate an answer.
+def _apply_threshold(hits, threshold):
+    # keep only sufficiently-similar chunks (None score => keep, can't judge)
+    return [h for h in hits if h["score"] is None or h["score"] <= threshold]
 
-    Returns (answer_text, pages, retrieved). If nothing passes the relevance
-    threshold, short-circuits to IDK_ANSWER without calling the LLM.
+
+def retrieve_top_k(collection, query, k=K_DEFAULT, threshold=DISTANCE_THRESHOLD):
+    """Return the k nearest chunks whose cosine distance <= threshold.
+
+    Results above the threshold are dropped, so an off-topic query returns an
+    empty list instead of forcing in irrelevant chunks. Each hit is a dict:
+    {"id", "text", "metadata", "score"}.
     """
-    # 1) Retrieve top-k relevant chunks (already distance-filtered)
-    retrieved = retrieve_top_k(collection, question, k=k)
+    return _apply_threshold(_query_chunks(collection, query, k=k), threshold)
 
-    # 1a) Short-circuit: no grounded context -> answer "I don't know".
+
+def _pages_of(chunks) -> list:
+    return sorted({
+        c.get("metadata", {}).get("page")
+        for c in chunks
+        if isinstance(c, dict) and c.get("metadata", {}).get("page") is not None
+    })
+
+
+def answer_question_detailed(collection, question, k=K_DEFAULT,
+                             model_name=GEN_MODEL,
+                             threshold=DISTANCE_THRESHOLD) -> dict:
+    """Retrieve grounded context, generate an answer, and report how it was made.
+
+    Returns a dict:
+      answer              final answer text (citation tags stripped)
+      pages               cited page numbers (see citations_verified)
+      retrieved           chunks that passed the threshold
+      abstained           is_abstention(answer) - the single shared definition
+      cited_ids           chunk ids the model cited that were in its context
+      citations_verified  True  -> `pages` are the pages of the cited chunks
+                          False -> the model cited nothing usable, so `pages`
+                                   falls back to every retrieved chunk's page
+      nearest_distance    distance of the closest chunk BEFORE thresholding
+                          (how close an abstained question came; for calibration)
+      threshold           the threshold that was applied
+      model_requested     model name sent to the API (may be an alias)
+      model_resolved      model name the API reported back, if any
+      finish_reason       generation finish reason, if generation ran
+    If nothing passes the threshold, short-circuits to IDK_ANSWER without
+    calling the LLM.
+    """
+    all_hits = _query_chunks(collection, question, k=k)
+    retrieved = _apply_threshold(all_hits, threshold)
+    distances = [h["score"] for h in all_hits if h["score"] is not None]
+
+    result = {
+        "answer": IDK_ANSWER,
+        "pages": [],
+        "retrieved": retrieved,
+        "abstained": True,
+        "cited_ids": [],
+        "citations_verified": False,
+        "nearest_distance": min(distances) if distances else None,
+        "threshold": threshold,
+        "model_requested": model_name,
+        "model_resolved": None,
+        "finish_reason": None,
+    }
+
+    # Short-circuit: no grounded context -> "I don't know" (no LLM call).
     if not retrieved:
-        return IDK_ANSWER, [], []
+        return result
 
-    # 2) Build context string (id header per chunk for citation)
-    context_items = []
-    for r in retrieved:
-        header = f"[{r['id']}]"
-        context_items.append(header + " " + r["text"])
-    context_str = "\n\n---\n\n".join(context_items)
+    # Build context string (id header per chunk so the model can cite it)
+    context_str = "\n\n---\n\n".join(f"[{r['id']}] {r['text']}" for r in retrieved)
 
-    # 3) Build messages and call chat completion (with retry/backoff)
     prompt_messages = [
         {"role": "system", "content": RAG_SYSTEM_MESSAGE},
         {"role": "user", "content": RAG_USER_TEMPLATE.format(
@@ -517,12 +644,25 @@ def answer_question(collection, question, k=K_DEFAULT, model_name=GEN_MODEL):
         response = _generate(GEN_MAX_TOKENS * 2)
         finish_reason = getattr(response.choices[0], "finish_reason", None)
 
+    result["finish_reason"] = finish_reason
+    # Record what the API says it actually ran: with a moving alias such as
+    # "gemini-flash-latest" this is the only trace of the real model version.
+    resolved = getattr(response, "model", None)
+    result["model_resolved"] = resolved if isinstance(resolved, str) and resolved else None
+
     # content can be None (e.g. a safety block or an empty completion);
     # treat that as an abstention rather than crashing on .strip().
     content = response.choices[0].message.content
     if not content or not content.strip():
-        return IDK_ANSWER, [], retrieved
-    answer_text = content.strip()
+        return result
+
+    answer_text, cited_ids = extract_citations(
+        content.strip(), [r["id"] for r in retrieved]
+    )
+
+    if is_abstention(answer_text) or not answer_text:
+        # The model itself declined: no answer, so nothing to cite.
+        return result
 
     if finish_reason in ("length", "MAX_TOKENS"):
         answer_text += (
@@ -530,11 +670,34 @@ def answer_question(collection, question, k=K_DEFAULT, model_name=GEN_MODEL):
             "try asking again or narrowing the question.)*"
         )
 
-    # 4) Extract page numbers for citation
-    pages = sorted({
-        doc.get("metadata", {}).get("page")
-        for doc in retrieved
-        if isinstance(doc, dict) and "page" in doc.get("metadata", {})
-    })
+    if cited_ids:
+        cited_chunks = [r for r in retrieved if r["id"] in set(cited_ids)]
+        pages = _pages_of(cited_chunks)
+        verified = True
+    else:
+        pages = _pages_of(retrieved)
+        verified = False
 
-    return answer_text, pages, retrieved
+    result.update(
+        answer=answer_text,
+        pages=pages,
+        abstained=False,
+        cited_ids=cited_ids,
+        citations_verified=verified,
+    )
+    return result
+
+
+def answer_question(collection, question, k=K_DEFAULT, model_name=GEN_MODEL,
+                    threshold=DISTANCE_THRESHOLD):
+    """Retrieve grounded context and generate an answer.
+
+    Returns (answer_text, pages, retrieved). `pages` are the pages of the
+    chunks the model cited (falling back to all retrieved pages if it cited
+    none); `pages` is [] whenever the system abstains. Use
+    answer_question_detailed() for abstention / citation / distance metadata.
+    """
+    r = answer_question_detailed(
+        collection, question, k=k, model_name=model_name, threshold=threshold
+    )
+    return r["answer"], r["pages"], r["retrieved"]

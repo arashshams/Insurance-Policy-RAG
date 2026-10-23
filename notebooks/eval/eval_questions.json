@@ -1,5 +1,5 @@
 {
-  "description": "Day-5 evaluation set for Insurance-Policy-RAG. In-scope questions must retrieve and answer (fill expected_keywords after a calibration run). Out-of-scope questions must abstain with the exact idk_answer string.",
+  "description": "Evaluation set for Insurance-Policy-RAG (bundled SAMPLE policy). In-scope questions must retrieve, answer, contain all expected_keywords, and cite a chunk on one of expected_pages (any-of; pages verified against app/demo_index). Out-of-scope questions must abstain with the exact idk_answer string; 'hard' ones are insurance-adjacent near-misses. Questions in_09-in_12 and out_05-out_06 were added 2026-10-23 and have not been through a calibration run yet.",
   "idk_answer": "I don't know",
   "in_scope": [
     {
@@ -11,7 +11,10 @@
         "covered",
         "licensed"
       ],
-      "notes": "Section 3 - Extended health care benefit > Paramedical services"
+      "notes": "Section 3 - Extended health care benefit > Paramedical services",
+      "expected_pages": [
+        10
+      ]
     },
     {
       "id": "in_02",
@@ -22,7 +25,10 @@
         "excluded",
         "vitamins"
       ],
-      "notes": "Prescription drug benefit (reworded: the annual dollar maximum is not in this policy - it defers to the Schedule of Benefits; ask about formulary/coverage/exclusions instead)"
+      "notes": "Prescription drug benefit (reworded: the annual dollar maximum is not in this policy - it defers to the Schedule of Benefits; ask about formulary/coverage/exclusions instead)",
+      "expected_pages": [
+        13
+      ]
     },
     {
       "id": "in_03",
@@ -33,7 +39,10 @@
         "purchase",
         "medical"
       ],
-      "notes": "Section 1 - How your policy works > When is a Prior Authorization form needed?"
+      "notes": "Section 1 - How your policy works > When is a Prior Authorization form needed?",
+      "expected_pages": [
+        6
+      ]
     },
     {
       "id": "in_04",
@@ -44,7 +53,10 @@
         "government",
         "family"
       ],
-      "notes": "Exclusions to health care benefits"
+      "notes": "Exclusions to health care benefits",
+      "expected_pages": [
+        15
+      ]
     },
     {
       "id": "in_05",
@@ -55,7 +67,10 @@
         "government",
         "18"
       ],
-      "notes": "Section 1 - How your policy works > Eligibility"
+      "notes": "Section 1 - How your policy works > Eligibility",
+      "expected_pages": [
+        4
+      ]
     },
     {
       "id": "in_06",
@@ -66,7 +81,13 @@
         "invoice",
         "submit"
       ],
-      "notes": "Section 2 - How we pay claims"
+      "notes": "Section 2 - How we pay claims",
+      "expected_pages": [
+        6,
+        7,
+        22,
+        27
+      ]
     },
     {
       "id": "in_07",
@@ -77,7 +98,12 @@
         "outside",
         "age"
       ],
-      "notes": "Section 4 - Emergency medical travel benefits"
+      "notes": "Section 4 - Emergency medical travel benefits",
+      "expected_pages": [
+        15,
+        16,
+        17
+      ]
     },
     {
       "id": "in_08",
@@ -88,7 +114,56 @@
         "HealthStarter",
         "plan"
       ],
-      "notes": "Dental benefit (not available on DrugPlus or HealthStarter plans)"
+      "notes": "Dental benefit (not available on DrugPlus or HealthStarter plans)",
+      "expected_pages": [
+        11
+      ]
+    },
+    {
+      "id": "in_09",
+      "question": "How long is the grace period for overdue premiums?",
+      "expected_keywords": [
+        "31",
+        "grace period"
+      ],
+      "expected_pages": [
+        5
+      ],
+      "notes": "Premiums: 31-day grace period (added 2026-10-23, uncalibrated)"
+    },
+    {
+      "id": "in_10",
+      "question": "Within what time period must a claim have happened for it to be paid?",
+      "expected_keywords": [
+        "12 months"
+      ],
+      "expected_pages": [
+        7
+      ],
+      "notes": "Section 2 - How we pay claims: claims that happened within the last 12 months (added 2026-10-23, uncalibrated)"
+    },
+    {
+      "id": "in_11",
+      "question": "What is the maximum for accidental dental under emergency medical travel benefits?",
+      "expected_keywords": [
+        "2,000"
+      ],
+      "expected_pages": [
+        17
+      ],
+      "notes": "Section 4 - Accidental dental, up to $2,000 (added 2026-10-23, uncalibrated)"
+    },
+    {
+      "id": "in_12",
+      "question": "What is the conversion privilege when a dependent's coverage ends?",
+      "expected_keywords": [
+        "21",
+        "30 days"
+      ],
+      "expected_pages": [
+        24
+      ],
+      "notes": "Section 6 - Conversion privilege: age 21, contact within 30 days (added 2026-10-23, uncalibrated)"
     }
   ],
   "out_of_scope": [
@@ -96,25 +171,43 @@
       "id": "out_01",
       "question": "What is the capital of France?",
       "expected": "I don't know",
-      "notes": "General knowledge, unrelated to the policy."
+      "notes": "General knowledge, unrelated to the policy.",
+      "hard": false
     },
     {
       "id": "out_02",
       "question": "Does this policy cover flood damage to my house?",
       "expected": "I don't know",
-      "notes": "Property/home insurance, not covered by this health policy."
+      "notes": "Property/home insurance, not covered by this health policy.",
+      "hard": false
     },
     {
       "id": "out_03",
       "question": "Will my car insurance premium go up after an accident?",
       "expected": "I don't know",
-      "notes": "Auto insurance, not covered by this health policy."
+      "notes": "Auto insurance, not covered by this health policy.",
+      "hard": false
     },
     {
       "id": "out_04",
       "question": "Can you give me legal advice about suing my insurer?",
       "expected": "I don't know",
-      "notes": "Legal advice, not policy content."
+      "notes": "Legal advice, not policy content.",
+      "hard": false
+    },
+    {
+      "id": "out_05",
+      "question": "Does this policy cover veterinary bills for my pet?",
+      "expected": "I don't know",
+      "hard": true,
+      "notes": "Insurance-adjacent near-miss: pet insurance is not in this health policy (added 2026-10-23, uncalibrated)."
+    },
+    {
+      "id": "out_06",
+      "question": "What interest rate does Manulife charge on a mortgage?",
+      "expected": "I don't know",
+      "hard": true,
+      "notes": "Names the insurer, which appears on every page, but mortgages are not in this policy (added 2026-10-23, uncalibrated)."
     }
   ]
 }
