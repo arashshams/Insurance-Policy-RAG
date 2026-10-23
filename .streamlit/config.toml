@@ -1,0 +1,5 @@
+# Streamlit server settings (read from the repo root on Streamlit Community Cloud).
+[server]
+# Reject large uploads at the transport level (MB). The app also enforces
+# INSURANCE_RAG_MAX_UPLOAD_MB plus page/chunk caps before embedding anything.
+maxUploadSize = 10

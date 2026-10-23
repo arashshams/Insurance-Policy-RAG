@@ -13,6 +13,16 @@ The bundled demo index (app/demo_index/, the SAMPLE-watermarked policy) is the
 served corpus, mirroring the Streamlit demo mode. Nothing is persisted per
 request; the index is opened once at startup.
 
+Abuse / cost controls (every /ask spends the server's Gemini quota):
+  * INSURANCE_RAG_API_TOKEN   if set, /ask requires
+                              "Authorization: Bearer <token>" (401 otherwise).
+                              Strongly recommended for any public deployment.
+  * per-client and global rate limits (429 + Retry-After); see
+    src/guardrails.py for the env vars. The client key is the socket peer
+    address; behind a reverse proxy that is the proxy, so the per-client limit
+    then behaves like a second global limit (still safe, just coarser).
+  * questions are capped at MAX_QUESTION_CHARS characters.
+
 Run locally:
     uvicorn api.main:app --reload
     # then: curl -X POST localhost:8000/ask -H 'content-type: application/json' \
@@ -22,11 +32,12 @@ Run locally:
 from __future__ import annotations
 
 import os
+import secrets
 import sys
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 # --- Make src/ importable whether run from repo root or api/ ----------------
@@ -34,10 +45,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src import guardrails  # noqa: E402 - after sys.path setup
 from src.rag_pipeline import (  # noqa: E402 - after sys.path setup
-    IDK_ANSWER,
     K_DEFAULT,
-    answer_question,
+    answer_question_detailed,
     load_persistent_collection,
 )
 
@@ -46,18 +57,54 @@ DEMO_INDEX_DIR = os.environ.get(
     "DEMO_INDEX_DIR", str(REPO_ROOT / "app" / "demo_index")
 )
 
+MAX_QUESTION_CHARS = int(os.environ.get("INSURANCE_RAG_MAX_QUESTION_CHARS", "1000"))
+
 app = FastAPI(
     title="Insurance-Policy-RAG API",
-    version="1.0.0",
+    version="1.1.0",
     description="Grounded, page-cited Q&A over an insurance policy.",
 )
 
 # Module-level cache for the opened collection (loaded lazily, once).
 _collection = None
 
+# Rate limiters (process-local; per-minute windows).
+_client_limiter = guardrails.RateLimiter(guardrails.API_RATE_PER_CLIENT, 60)
+_global_limiter = guardrails.RateLimiter(guardrails.API_RATE_GLOBAL, 60)
+
 
 def _api_key_present() -> bool:
     return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+
+
+def _api_token() -> str:
+    return os.environ.get("INSURANCE_RAG_API_TOKEN", "").strip()
+
+
+def _check_auth(authorization: str | None) -> None:
+    token = _api_token()
+    if not token:
+        return
+    supplied = ""
+    if authorization and authorization.lower().startswith("bearer "):
+        supplied = authorization[7:].strip()
+    if not supplied or not secrets.compare_digest(supplied, token):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing or invalid bearer token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+def _check_rate(client_key: str) -> None:
+    for limiter, key in ((_client_limiter, client_key), (_global_limiter, "global")):
+        ok, retry_after = limiter.allow(key)
+        if not ok:
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded; try again shortly.",
+                headers={"Retry-After": str(max(1, int(retry_after) + 1))},
+            )
 
 
 def _get_collection():
@@ -75,7 +122,10 @@ def _get_collection():
 
 # --- Schemas ----------------------------------------------------------------
 class AskRequest(BaseModel):
-    question: str = Field(..., min_length=1, description="Natural-language question.")
+    question: str = Field(
+        ..., min_length=1, max_length=MAX_QUESTION_CHARS,
+        description="Natural-language question.",
+    )
     k: int = Field(K_DEFAULT, ge=1, le=20, description="Number of chunks to retrieve.")
 
 
@@ -90,6 +140,14 @@ class AskResponse(BaseModel):
     answer: str
     pages: list[int]
     abstained: bool
+    citations_verified: bool = Field(
+        False,
+        description=(
+            "True when `pages` come from the passages the model explicitly "
+            "cited; False when it cited none and `pages` lists every "
+            "retrieved passage instead."
+        ),
+    )
     retrieved: list[RetrievedChunk]
 
 
@@ -101,13 +159,21 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "index_present": os.path.isdir(DEMO_INDEX_DIR),
         "api_key_present": _api_key_present(),
+        "auth_required": bool(_api_token()),
         "model_default": os.environ.get("INSURANCE_RAG_GEN_MODEL", "gemini-flash-latest"),
     }
 
 
 @app.post("/ask", response_model=AskResponse)
-def ask(req: AskRequest) -> AskResponse:
+def ask(
+    req: AskRequest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> AskResponse:
     """Answer a question grounded in the bundled policy, cited by page."""
+    _check_auth(authorization)
+    _check_rate(request.client.host if request.client else "unknown")
+
     if not _api_key_present():
         raise HTTPException(
             status_code=503,
@@ -120,13 +186,9 @@ def ask(req: AskRequest) -> AskResponse:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     try:
-        answer, pages, retrieved = answer_question(collection, req.question, k=req.k)
+        result = answer_question_detailed(collection, req.question, k=req.k)
     except Exception as exc:  # noqa: BLE001 - surface pipeline errors as 502
         raise HTTPException(status_code=502, detail=f"Pipeline error: {exc}") from exc
-
-    abstained = (not retrieved) or answer.strip().lower().startswith(
-        IDK_ANSWER.lower()
-    )
 
     chunks = [
         RetrievedChunk(
@@ -135,12 +197,13 @@ def ask(req: AskRequest) -> AskResponse:
             score=r.get("score"),
             text=r.get("text", ""),
         )
-        for r in retrieved
+        for r in result["retrieved"]
     ]
 
     return AskResponse(
-        answer=answer,
-        pages=[p for p in pages if p is not None],
-        abstained=abstained,
+        answer=result["answer"],
+        pages=[p for p in result["pages"] if p is not None],
+        abstained=result["abstained"],
+        citations_verified=result["citations_verified"],
         retrieved=chunks,
     )

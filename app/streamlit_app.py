@@ -5,13 +5,19 @@ Thin UI layer over src/rag_pipeline.py. Two modes:
 - Bundled-policy demo: loads a pre-built, on-disk Chroma index shipped
   with the app (no embedding calls at startup -> free-tier friendly).
 - User upload: builds a per-session, in-memory ephemeral index from an
-  uploaded PDF and persists nothing (privacy).
+  uploaded PDF and writes nothing to disk. The PDF's text IS sent to the
+  Gemini API to be embedded and answered (see the privacy notice in the UI).
 
 Demo mode can optionally be served by the FastAPI backend (api/main.py):
 set INSURANCE_RAG_API_URL to the backend's base URL and demo questions are
-answered over HTTP instead of in-process. Upload mode always runs in-process
-(the API only serves the bundled demo policy). If the variable is unset the
-app behaves exactly as before.
+answered over HTTP instead of in-process (INSURANCE_RAG_API_TOKEN is sent as a
+bearer token if set). Upload mode always runs in-process (the API only serves
+the bundled demo policy). If the variable is unset the app behaves as before.
+
+Cost controls for the shared public app (all env-overridable, see
+src/guardrails.py and src/rag_pipeline.py): upload size / page / chunk caps,
+per-session and app-wide rate limits on questions and uploads, a cap on
+concurrent upload indexes, and an idle TTL that frees abandoned uploads.
 
 Run locally: streamlit run app/streamlit_app.py
 """
@@ -19,6 +25,7 @@ Run locally: streamlit run app/streamlit_app.py
 import io
 import os
 import sys
+import uuid
 from pathlib import Path
 
 import streamlit as st
@@ -56,7 +63,7 @@ def _load_secrets_into_env() -> None:
     if not _secrets_file_exists():
         return
     for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "INSURANCE_RAG_ROOT",
-                "INSURANCE_RAG_API_URL"):
+                "INSURANCE_RAG_API_URL", "INSURANCE_RAG_API_TOKEN"):
         try:
             value = st.secrets.get(key)
         except Exception:
@@ -74,6 +81,7 @@ def _api_key_present() -> bool:
 # instead of running the pipeline in-process. Trailing slash is trimmed so we
 # can safely append "/ask".
 API_URL = os.environ.get("INSURANCE_RAG_API_URL", "").strip().rstrip("/")
+API_TOKEN = os.environ.get("INSURANCE_RAG_API_TOKEN", "").strip()
 
 # Path to the pre-built demo index shipped with the app (Option B).
 # Overridable via secrets/env if you store it elsewhere.
@@ -99,13 +107,56 @@ EXAMPLE_QUESTIONS = [
     "What expenses are excluded from health care benefits?",
 ]
 
+from src import guardrails
 from src.rag_pipeline import (
-    IDK_ANSWER,
-    answer_question,
+    DISTANCE_THRESHOLD,
+    MAX_UPLOAD_CHUNKS,
+    MAX_UPLOAD_MB,
+    MAX_UPLOAD_PAGES,
+    UPLOAD_DISTANCE_THRESHOLD,
+    DocumentTooLargeError,
+    answer_question_detailed,
     build_index_from_pdf,
     drop_collection,
     load_persistent_collection,
 )
+
+# --- Process-wide guardrail state (shared by every visitor) -----------------
+@st.cache_resource(show_spinner=False)
+def _upload_registry() -> guardrails.UploadIndexRegistry:
+    return guardrails.UploadIndexRegistry(dropper=drop_collection)
+
+@st.cache_resource(show_spinner=False)
+def _limiters() -> dict:
+    return {
+        "q_session": guardrails.RateLimiter(guardrails.APP_QUESTIONS_PER_SESSION, 60),
+        "q_global": guardrails.RateLimiter(guardrails.APP_QUESTIONS_GLOBAL, 60),
+        "up_session": guardrails.RateLimiter(guardrails.APP_UPLOADS_PER_SESSION, 3600),
+        "up_global": guardrails.RateLimiter(guardrails.APP_UPLOADS_GLOBAL, 3600),
+    }
+
+def _session_id() -> str:
+    if "sid" not in st.session_state:
+        st.session_state["sid"] = uuid.uuid4().hex
+    return st.session_state["sid"]
+
+def _rate_ok(session_key: str, global_key: str, what: str) -> bool:
+    """Check a per-session and an app-wide limiter; show a message if blocked."""
+    lim = _limiters()
+    for name, key in ((session_key, _session_id()), (global_key, "global")):
+        ok, retry_after = lim[name].allow(key)
+        if not ok:
+            st.warning(
+                f"Too many {what} right now — please wait about "
+                f"{max(1, int(retry_after) + 1)} seconds and try again. "
+                "(Limits keep this free demo available for everyone.)"
+            )
+            return False
+    return True
+
+# Free uploads abandoned by sessions that went away (idle longer than the TTL).
+# Runs on every script run of every visitor, so stale indexes don't pile up.
+_upload_registry().sweep()
 
 st.title("Insurance-Policy-RAG")
 st.caption(
@@ -123,7 +174,9 @@ with st.expander("How it works"):
         "3. It writes an answer using only what's in those parts, and "
         "tells you which page(s) it came from.\n"
         "4. If the policy doesn't cover your question, it says so "
-        "instead of making something up."
+        "instead of making something up.\n\n"
+        "Steps 2–3 use Google's Gemini API, so the relevant policy text "
+        "and your question are sent to Google to produce the answer."
     )
 
 # --- Sidebar: mode selection ------------------------------------------------
@@ -135,8 +188,8 @@ with st.sidebar:
         index=0,
         help=(
             "Try the sample policy to see how it works, or upload your "
-            "own PDF. Your uploaded file is only used for this session "
-            "and is never saved."
+            "own PDF. Uploads aren't saved to disk, but their text is sent "
+            "to Google's Gemini API to be processed."
         ),
     )
     st.divider()
@@ -161,39 +214,59 @@ def _get_uploaded_collection(file_bytes: bytes, file_name: str):
     """Return this session's in-memory index for the uploaded PDF.
 
     persist_dir is None, so rag_pipeline uses an EphemeralClient and writes
-    NOTHING to disk. The index is kept in st.session_state (per browser
-    session) - NOT st.cache_resource, which is shared by every visitor of
-    the app process. Each build gets a unique collection name, so one user's
+    NOTHING to disk. The collection lives in the process-wide
+    UploadIndexRegistry; this session only keeps its name + content hash in
+    st.session_state. Each build gets a unique collection name, so one user's
     upload can never delete or touch another user's index. We embed once per
-    uploaded file per session (keyed on a content hash) and free the previous
-    upload's collection when the user switches files.
+    uploaded file per session (keyed on a content hash), free the previous
+    upload when the user switches files, and the registry frees any upload
+    left idle longer than its TTL (abandoned sessions).
+
+    Returns None (after showing a message) when the upload is refused by a
+    cap or rate limit.
     """
     import hashlib
 
+    registry = _upload_registry()
     digest = hashlib.sha256(file_bytes).hexdigest()
     current = st.session_state.get("upload_index")
     if current and current["digest"] == digest:
-        return current["collection"]
+        collection = registry.get(current["name"])
+        if collection is not None:
+            return collection
+        st.info("Your earlier upload expired after being idle, so it is being "
+                "processed again.")
 
-    collection, _chunks = build_index_from_pdf(
-        io.BytesIO(file_bytes), persist_dir=None, source_name=file_name
-    )
+    if not registry.has_capacity():
+        st.warning("The demo is handling the maximum number of uploaded "
+                   "policies right now. Please try again in a few minutes.")
+        return None
+    if not _rate_ok("up_session", "up_global", "uploads"):
+        return None
+
+    with st.spinner("Embedding your policy (one-time per upload)..."):
+        collection, _chunks = build_index_from_pdf(
+            io.BytesIO(file_bytes), persist_dir=None, source_name=file_name,
+            max_pages=MAX_UPLOAD_PAGES, max_chunks=MAX_UPLOAD_CHUNKS,
+        )
     if current:
-        drop_collection(current["collection"])
-    st.session_state["upload_index"] = {"digest": digest, "collection": collection}
+        registry.remove(current["name"])
+    st.session_state["upload_index"] = {
+        "digest": digest, "name": registry.add(collection),
+    }
     return collection
 
-def _answer_via_api(question: str):
-    """Ask the FastAPI backend and normalize its reply to the in-process shape.
+def _answer_via_api(question: str) -> dict:
+    """Ask the FastAPI backend and normalize its reply to the in-process shape
+    returned by answer_question_detailed (the fields the UI uses).
 
-    Returns (answer, pages, retrieved) so the rest of the UI is identical
-    whether the answer came from the API or from the local pipeline. Raises
-    on transport/HTTP errors so the caller can surface them.
+    Raises on transport/HTTP errors so the caller can surface them.
     """
     import requests
 
+    headers = {"Authorization": f"Bearer {API_TOKEN}"} if API_TOKEN else {}
     resp = requests.post(
-        f"{API_URL}/ask", json={"question": question}, timeout=60
+        f"{API_URL}/ask", json={"question": question}, headers=headers, timeout=60
     )
     resp.raise_for_status()
     data = resp.json()
@@ -206,9 +279,16 @@ def _answer_via_api(question: str):
         }
         for c in data.get("retrieved", [])
     ]
-    return data.get("answer", ""), data.get("pages", []), retrieved
+    return {
+        "answer": data.get("answer", ""),
+        "pages": data.get("pages", []),
+        "retrieved": retrieved,
+        "abstained": bool(data.get("abstained")),
+        "citations_verified": bool(data.get("citations_verified")),
+    }
 
-def _render_answer(question: str, collection, use_api: bool = False) -> None:
+def _render_answer(question: str, collection, use_api: bool = False,
+                   threshold: float = DISTANCE_THRESHOLD) -> None:
     """Run one question and render the grounded result.
 
     When use_api is True the FastAPI backend answers over HTTP (the API key
@@ -223,17 +303,22 @@ def _render_answer(question: str, collection, use_api: bool = False) -> None:
         )
         return
 
+    if not _rate_ok("q_session", "q_global", "questions"):
+        return
+
     try:
         with st.spinner("Retrieving and generating a grounded answer..."):
             if use_api:
-                answer, pages, retrieved = _answer_via_api(question)
+                result = _answer_via_api(question)
             else:
-                answer, pages, retrieved = answer_question(collection, question)
+                result = answer_question_detailed(
+                    collection, question, threshold=threshold
+                )
     except Exception as exc:  # noqa: BLE001 - surface API/pipeline errors
         st.error(f"Could not get an answer: {exc}")
         return
 
-    if answer.strip().lower().startswith(IDK_ANSWER.lower()):
+    if result["abstained"]:
         st.warning(
             "**I don't know.** This policy doesn't seem to cover that, so "
             "rather than guess, here's an honest answer. Try rephrasing, or "
@@ -241,11 +326,18 @@ def _render_answer(question: str, collection, use_api: bool = False) -> None:
         )
         return
 
+    retrieved = result["retrieved"]
     st.markdown("### Answer")
-    st.write(answer)
-    if pages:
-        cited = ", ".join(str(p) for p in pages)
-        st.caption(f"Cited page(s): {cited}")
+    st.write(result["answer"])
+    if result["pages"]:
+        cited = ", ".join(str(p) for p in result["pages"])
+        if result.get("citations_verified"):
+            st.caption(f"Cited page(s): {cited}")
+        else:
+            st.caption(
+                f"Page(s) of the passages used: {cited} "
+                "(the answer didn't point to specific passages)"
+            )
 
     with st.expander(f"Retrieved passages ({len(retrieved)})"):
         for r in retrieved:
@@ -257,7 +349,8 @@ def _render_answer(question: str, collection, use_api: bool = False) -> None:
             st.divider()
 
 def _query_ui(collection, key_prefix: str, show_examples: bool = True,
-              use_api: bool = False) -> None:
+              use_api: bool = False,
+              threshold: float = DISTANCE_THRESHOLD) -> None:
     """Shared question UI (example buttons + free-text) used by both modes."""
     clicked = None
     if show_examples:
@@ -268,7 +361,7 @@ def _query_ui(collection, key_prefix: str, show_examples: bool = True,
                 clicked = q
 
     typed = st.text_input(
-        "...or ask your own question:", key=f"{key_prefix}_query"
+        "...or ask your own question:", key=f"{key_prefix}_query", max_chars=500
     )
     if st.button("Ask", type="primary", key=f"{key_prefix}_ask"):
         clicked = typed.strip() or clicked
@@ -276,7 +369,7 @@ def _query_ui(collection, key_prefix: str, show_examples: bool = True,
             st.info("Type a question above (or pick an example) first.")
 
     if clicked:
-        _render_answer(clicked, collection, use_api=use_api)
+        _render_answer(clicked, collection, use_api=use_api, threshold=threshold)
 
 def render_demo_mode() -> None:
     """Bundled-policy demo: query the pre-built SAMPLE-policy index.
@@ -313,26 +406,50 @@ def render_demo_mode() -> None:
 def render_upload_mode() -> None:
     """User-upload: build a per-session, in-memory index from a PDF."""
     st.info(
-        "Upload your policy as a PDF and ask away. Your file is used only "
-        "for this session — it's never saved or shared."
+        "Upload your policy as a PDF and ask away. Your file isn't saved to "
+        "disk, and it's cleared from memory when you switch files or after "
+        f"{guardrails.UPLOAD_TTL_SECONDS // 60} minutes of inactivity.\n\n"
+        "**Before you upload:** to answer your questions, the policy text is "
+        "sent to Google's Gemini API. On Gemini's free tier, Google may use "
+        "submitted content to improve its products. Don't upload documents "
+        "containing personal details you aren't comfortable sharing."
     )
 
-    uploaded = st.file_uploader("Your policy (PDF)", type=["pdf"])
+    uploaded = st.file_uploader(
+        f"Your policy (PDF, up to {MAX_UPLOAD_MB:g} MB and "
+        f"{MAX_UPLOAD_PAGES} pages)",
+        type=["pdf"],
+    )
     if uploaded is None:
         st.caption("Upload a PDF above to get started.")
         return
 
+    file_bytes = uploaded.getvalue()
+    if len(file_bytes) > MAX_UPLOAD_MB * 1024 * 1024:
+        st.error(f"That file is larger than {MAX_UPLOAD_MB:g} MB. "
+                 "Please upload a smaller PDF.")
+        return
+
     try:
-        with st.spinner("Embedding your policy (one-time per upload)..."):
-            collection = _get_uploaded_collection(
-                uploaded.getvalue(), uploaded.name
-            )
+        collection = _get_uploaded_collection(file_bytes, uploaded.name)
+    except DocumentTooLargeError as exc:
+        st.error(f"{exc} Please upload a shorter document.")
+        return
     except Exception as exc:  # noqa: BLE001 - surface build errors to the user
         st.error(f"Could not process this PDF: {exc}")
         return
+    if collection is None:
+        return
 
     st.success(f"Got it — '{uploaded.name}' is ready. Ask a question below.")
-    _query_ui(collection, key_prefix="upload", show_examples=False)
+    st.caption(
+        "Note: the relevance cut-off behind \"I don't know\" was tuned on "
+        "the sample policy. On other documents it may be stricter or looser "
+        "than intended, so double-check important answers against the "
+        "cited pages."
+    )
+    _query_ui(collection, key_prefix="upload", show_examples=False,
+              threshold=UPLOAD_DISTANCE_THRESHOLD)
 
 # --- Mode routing -----------------------------------------------------------
 if mode == "Bundled-policy demo":
