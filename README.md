@@ -104,20 +104,28 @@ src/
   evaluate.py                       # evaluation harness (CLI: python -m src.evaluate)
   guardrails.py                     # rate limiting + idle-upload cleanup
 tests/                              # offline tests (no API key needed)
-.github/workflows/tests.yml         # CI: runs the offline tests
+.github/workflows/tests.yml         # CI: lint + offline tests
 .streamlit/config.toml              # Streamlit server settings (upload size cap)
 data/
   documents/                        # local policy PDF (NOT committed — privacy)
-requirements.txt
+Makefile                            # setup / test / lint / eval / run-app / run-api
+PLAN.md                             # upgrade roadmap, decisions and progress log
+requirements.txt                    # pinned runtime dependencies
+requirements-dev.txt                # pinned test + lint tools
+ruff.toml                           # lint configuration
 ```
 
 ## Getting started
 
-1. Install dependencies: `pip install -r requirements.txt`
-2. Provide a Gemini API key (free-tier eligible) via your environment.
-3. Place your policy PDF in `data/documents/` (optionally set `INSURANCE_RAG_ROOT`).
-4. Run the notebooks in order (01 -> 02 -> 03), or import `src/rag_pipeline.py` directly and call `build_index_from_pdf(...)` then `answer_question(...)`.
-5. Run the offline test suite (no API key needed): `pytest tests/`
+Use Python 3.11 (the pinned `numpy` has no wheels for 3.13+).
+
+1. Install dependencies: `make setup` (or `pip install -r requirements.txt -r requirements-dev.txt`).
+2. Provide a Gemini API key (free-tier eligible) via your environment, e.g. `export GEMINI_API_KEY="..."`.
+3. Run the offline tests and lint (no API key needed): `make test lint`.
+4. Run the app (`make run-app`), the API (`make run-api`) or the evaluation (`make eval`).
+5. To work with your own policy, place the PDF in `data/documents/` (git-ignored), then run the notebooks in order (01 -> 02 -> 03), or import `src/rag_pipeline.py` and call `build_index_from_pdf(...)` then `answer_question(...)`.
+
+`make help` lists every target with the plain command it runs, for systems without `make` (on Windows, `conda install make` provides it). After running the app or the evaluation locally, `make restore-index` undoes the changes ChromaDB makes to the committed demo index files.
 
 ### Programmatic use
 

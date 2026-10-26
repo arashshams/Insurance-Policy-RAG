@@ -560,4 +560,5 @@ def test_summary_separates_threshold_and_model_refusals():
     assert s["distance_margin"]["separable"] is False
     text = ev.format_summary(s, "idx")
     assert "1 / 1 of 2" in text and "the model's refusal caught the rest" in text
-    assert any("(model refused)" in l for l in logs) and any("(threshold)" in l for l in logs)
+    assert any("(model refused)" in line for line in logs)
+    assert any("(threshold)" in line for line in logs)
