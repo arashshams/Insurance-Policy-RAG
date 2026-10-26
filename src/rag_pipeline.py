@@ -94,7 +94,9 @@ ENCODING_NAME = os.environ.get("INSURANCE_RAG_ENCODING", "cl100k_base")
 # Page-quality gate: skip a page if its 'scramble ratio' exceeds this.
 SCRAMBLE_THRESHOLD = float(os.environ.get("INSURANCE_RAG_SCRAMBLE_THRESHOLD", "0.5"))
 
-# Query-time retry/backoff for free-tier rate limits (mirrors indexing loop)
+# Retry/backoff for transient Gemini failures: free-tier rate limits (429),
+# temporary overload / server errors (5xx, e.g. 503 "high demand") and
+# connection errors or timeouts. Waits QUERY_INITIAL_SLEEP, then doubles.
 QUERY_MAX_RETRIES = int(os.environ.get("INSURANCE_RAG_MAX_RETRIES", "5"))
 QUERY_INITIAL_SLEEP = float(os.environ.get("INSURANCE_RAG_INITIAL_SLEEP", "2.0"))
 
@@ -132,7 +134,47 @@ def is_abstention(answer: str, idk: str = IDK_ANSWER) -> bool:
 import time
 
 from openai import OpenAI
-from openai import RateLimitError
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    RateLimitError,
+)
+
+# Errors worth retrying: they are about Gemini's state right now, not about
+# the request. (APITimeoutError subclasses APIConnectionError; listed for
+# clarity.) Auth / bad-request errors are NOT retried - they won't fix
+# themselves.
+_RETRYABLE_ERRORS = (RateLimitError, InternalServerError, APIConnectionError, APITimeoutError)
+
+
+class GeminiUnavailableError(RuntimeError):
+    """Gemini kept failing with transient errors after every retry."""
+
+
+def _call_with_backoff(fn, what: str):
+    """Call fn(), retrying transient Gemini errors with exponential backoff.
+
+    Retries up to QUERY_MAX_RETRIES times, sleeping QUERY_INITIAL_SLEEP
+    seconds before the first retry and doubling each time. Raises
+    GeminiUnavailableError (chained to the last error) if it never succeeds.
+    """
+    retries = 0
+    sleep_time = QUERY_INITIAL_SLEEP
+    while True:
+        try:
+            return fn()
+        except _RETRYABLE_ERRORS as exc:
+            retries += 1
+            if retries > QUERY_MAX_RETRIES:
+                kind = ("rate-limited" if isinstance(exc, RateLimitError)
+                        else "temporarily unavailable")
+                raise GeminiUnavailableError(
+                    f"Gemini is {kind} ({what} failed after {QUERY_MAX_RETRIES} "
+                    "retries). Please try again in a few minutes."
+                ) from exc
+            time.sleep(sleep_time)
+            sleep_time *= 2
 
 
 def _read_api_key() -> str:
@@ -172,22 +214,13 @@ EMBED_BATCH = int(os.environ.get("INSURANCE_RAG_EMBED_BATCH", "16"))
 
 
 def embed_query(text: str, client: OpenAI | None = None) -> list[float]:
-    """Embed a single string, retrying with exponential backoff on rate limits."""
+    """Embed a single string, retrying transient errors with backoff."""
     client = client or get_client()
-    retries = 0
-    sleep_time = QUERY_INITIAL_SLEEP
-    while True:
-        try:
-            resp = client.embeddings.create(model=EMBED_MODEL, input=[text])
-            return resp.data[0].embedding
-        except RateLimitError:
-            retries += 1
-            if retries > QUERY_MAX_RETRIES:
-                raise RuntimeError(
-                    f"Embedding rate limit persists after {QUERY_MAX_RETRIES} retries."
-                )
-            time.sleep(sleep_time)
-            sleep_time *= 2
+    resp = _call_with_backoff(
+        lambda: client.embeddings.create(model=EMBED_MODEL, input=[text]),
+        "embedding",
+    )
+    return resp.data[0].embedding
 
 
 def embed_texts(
@@ -211,22 +244,11 @@ def embed_texts(
     all_embeddings: list[list[float]] = []
     for i in iterator:
         batch_texts = texts[i : i + batch]
-        retries = 0
-        sleep_time = QUERY_INITIAL_SLEEP
-        while True:
-            try:
-                resp = client.embeddings.create(model=EMBED_MODEL, input=batch_texts)
-                all_embeddings.extend([r.embedding for r in resp.data])
-                break
-            except RateLimitError:
-                retries += 1
-                if retries > QUERY_MAX_RETRIES:
-                    raise RuntimeError(
-                        f"Embedding rate limit persists after {QUERY_MAX_RETRIES} "
-                        f"retries. Consider waiting longer or reducing batch size."
-                    )
-                time.sleep(sleep_time)
-                sleep_time *= 2
+        resp = _call_with_backoff(
+            lambda: client.embeddings.create(model=EMBED_MODEL, input=batch_texts),
+            "embedding",
+        )
+        all_embeddings.extend([r.embedding for r in resp.data])
     return all_embeddings
 
 
@@ -569,7 +591,8 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
                           (how close an abstained question came; for calibration)
       threshold           the threshold that was applied
       model_requested     model name sent to the API (may be an alias)
-      model_resolved      model name the API reported back, if any
+      model_resolved      model name the API reported back, if any (Gemini's
+                          OpenAI-compatible endpoint echoes the requested name)
       finish_reason       generation finish reason, if generation ran
     If nothing passes the threshold, short-circuits to IDK_ANSWER without
     calling the LLM.
@@ -609,29 +632,18 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
     extra_body = {"reasoning_effort": GEN_REASONING_EFFORT} if GEN_REASONING_EFFORT else None
 
     def _generate(max_tokens):
-        """One generation attempt, with the existing rate-limit retry/backoff."""
-        retries = 0
-        sleep_time = QUERY_INITIAL_SLEEP
-        while True:
-            try:
-                kwargs = dict(
-                    model=model_name,
-                    messages=prompt_messages,
-                    temperature=0.0,
-                    max_tokens=max_tokens,
-                )
-                if extra_body:
-                    kwargs["extra_body"] = extra_body
-                return client.chat.completions.create(**kwargs)
-            except RateLimitError:
-                retries += 1
-                if retries > QUERY_MAX_RETRIES:
-                    raise RuntimeError(
-                        f"Generation rate limit persists after {QUERY_MAX_RETRIES} "
-                        f"retries."
-                    )
-                time.sleep(sleep_time)
-                sleep_time *= 2
+        """One generation attempt, retrying transient errors with backoff."""
+        kwargs = dict(
+            model=model_name,
+            messages=prompt_messages,
+            temperature=0.0,
+            max_tokens=max_tokens,
+        )
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+        return _call_with_backoff(
+            lambda: client.chat.completions.create(**kwargs), "generation"
+        )
 
     response = _generate(GEN_MAX_TOKENS)
     finish_reason = getattr(response.choices[0], "finish_reason", None)
@@ -645,8 +657,9 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
         finish_reason = getattr(response.choices[0], "finish_reason", None)
 
     result["finish_reason"] = finish_reason
-    # Record what the API says it actually ran: with a moving alias such as
-    # "gemini-flash-latest" this is the only trace of the real model version.
+    # Record the model name the API reports. Gemini's OpenAI-compatible
+    # endpoint currently just echoes the requested name (alias included), so
+    # this only identifies an exact version if one was requested.
     resolved = getattr(response, "model", None)
     result["model_resolved"] = resolved if isinstance(resolved, str) and resolved else None
 

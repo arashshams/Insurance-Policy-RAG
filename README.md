@@ -77,7 +77,7 @@ The module exposes these functions, which the notebooks, the evaluation harness,
 - `build_index_from_pdf(source, persist_dir=None, ...)` -> `(collection, chunks)`. `source` is a path or uploaded bytes; `persist_dir=None` builds an in-memory index.
 - `retrieve_top_k(collection, query, k=K_DEFAULT, threshold=DISTANCE_THRESHOLD)` -> a list of `{id, text, metadata, score}` for the passages that clear the threshold.
 - `answer_question(collection, question, k=K_DEFAULT, model_name=GEN_MODEL, threshold=DISTANCE_THRESHOLD)` -> `(answer_text, pages, retrieved)`, returning `("I don't know", [], [])` when retrieval comes back empty. `pages` are the pages of the passages the model cited, and `[]` whenever the system abstains.
-- `answer_question_detailed(...)` (same arguments) -> a dict with the above plus `abstained`, `cited_ids`, `citations_verified` (False when the model cited nothing and `pages` falls back to every retrieved passage), `nearest_distance` (closest passage *before* the threshold), and `model_resolved` (the model version the API reported).
+- `answer_question_detailed(...)` (same arguments) -> a dict with the above plus `abstained`, `cited_ids`, `citations_verified` (False when the model cited nothing and `pages` falls back to every retrieved passage), `nearest_distance` (closest passage *before* the threshold), and `model_resolved` (the model name the API reported; Gemini's endpoint currently echoes the requested name, so this pins down a version only if you request one).
 - `is_abstention(answer)` -> the single definition of "the system said I don't know", used by the app, the API and the evaluation.
 
 ## Repository layout
@@ -147,22 +147,34 @@ Calibration and the numbers below were produced against a published, SAMPLE-wate
 
 The pipeline is validated end-to-end on the free tier using an evaluation harness (`src/evaluate.py`, with `04_evaluation.ipynb` as a notebook runner). All metrics are deterministic (no LLM judge):
 
-- **Guardrail:** out-of-scope abstention rate, judged with the same `is_abstention` rule the app and API use.
+- **Guardrail:** out-of-scope abstention rate, judged with the same `is_abstention` rule the app and API use, and whether each abstention came from the distance threshold or the model's refusal.
 - **Retrieval:** in-scope hit rate (anything passed the threshold) and page rate (a passage from the question's `expected_pages` was retrieved).
 - **Answers:** citation page rate (the answer cited a passage on an expected page) and keyword rate (all expected keywords appear).
 - **Headroom:** each question's closest-passage distance *before* the threshold, the gap between the worst in-scope and best out-of-scope question, and a suggested threshold.
 
-Each record also stores the model version the API reported, and cached results expire after 14 days (`--max-age-days`), because the default model name is a moving alias.
+Cached results expire after 14 days (`--max-age-days`), because the default model name is a moving alias and Gemini's OpenAI-compatible endpoint doesn't report which version served a request. Scoring is re-applied to cached answers on every run, so editing a question's expected keywords or pages doesn't need new API calls.
+
+Latest run (October 2026, shipped 38-chunk demo index, `gemini-flash-latest`, 12 in-scope + 6 out-of-scope questions):
 
 | Metric | Result |
 |---|---|
-| Out-of-scope abstention rate | **100%** |
+| Out-of-scope abstention rate | **100%** (6 / 6) |
 | In-scope retrieval hit rate | **100%** |
-| In-scope questions answered | **7 / 8** |
+| In-scope questions answered | **12 / 12** |
+| In-scope citation page rate | **100%** (every answer cited a passage on an expected page) |
+| In-scope answer-keyword rate | **92%** (11 / 12; see below) |
+| Closest-passage distance, in-scope max / out-of-scope min | 0.344 / 0.335 |
 
-These numbers come from the original calibration run on the 37-chunk Colab index with the original 8 in-scope and 4 out-of-scope questions. The single non-answer was **correct by design**: that question (`in_02`) originally asked for a figure that lives in a separate Schedule of Benefits, not in this policy document, so the system abstained rather than guess. `in_02` has since been reworded to ask about formulary coverage and exclusions, which the policy does cover.
+The one keyword miss (`in_07`) was a correct answer: it gave the $5 million per-incident travel limit from page 17 but didn't use the words "outside" and "age" that the old keyword list required. The keywords now check for that limit instead. Two in-scope questions sit fairly close to the 0.37 cutoff (`in_01` at 0.336, `in_06` at 0.344), so rewording them could tip them into "I don't know".
 
-The question set has since grown to **12 in-scope and 6 out-of-scope** questions. Every in-scope question now has `expected_pages` (checked against the demo index text), and two of the new out-of-scope questions are deliberately hard near-misses (pet insurance; a question naming the insurer). The new questions and the page metrics **have not been through a calibration run yet**, so the table above will change once the harness is re-run, and with only 18 questions it remains a small sample.
+**How "I don't know" actually happens.** The guardrail has two layers, and this run shows both are needed:
+
+1. **Distance threshold (0.37).** If no passage is close enough, the system says "I don't know" without calling the LLM. This stopped the four clearly unrelated questions (closest passages 0.397–0.503).
+2. **The model's refusal.** The prompt tells Gemini to answer only from the passages it is given. The two near-miss questions (pet vet bills at 0.335; a Manulife mortgage question at 0.366) got past the threshold, but Gemini found no answer in the passages and said "I don't know".
+
+No single threshold separates this question set: the pet question's closest passage (0.335) is nearer than four real questions' (up to 0.344). Lowering the cutoff enough to block it would reject real questions, so 0.37 stays, and the model's refusal is what handles questions that sound related but aren't covered. The evaluation summary reports how each out-of-scope question was stopped.
+
+An earlier calibration run (37-chunk Colab index, the original 8 in-scope and 4 out-of-scope questions) answered 7 of 8 in-scope questions. The non-answer was correct by design: that question (`in_02`) then asked for a figure that lives in a separate Schedule of Benefits, not in this policy, and has since been reworded. With 18 questions on one sample policy, all of these figures are a small sample.
 
 The harness evaluates the exact code and index the live app ships. To reproduce or refresh the numbers on the shipped 38-chunk demo index:
 
@@ -186,7 +198,7 @@ This builds an in-memory index of the PDF (one embedding pass), runs the questio
 ## Responsible AI
 
 - Answers are grounded in retrieved document content and cited by page. Pages come from the passages the model actually cited; when it cites none, the app says the pages are those of all retrieved passages instead.
-- The system returns "I don't know" when the information isn't present.
+- The system returns "I don't know" when the information isn't present: either no passage is close enough (no LLM call is made), or the model finds no answer in the passages it was given.
 - Scope and limitations are stated explicitly, including that the relevance threshold is calibrated on the sample policy only.
 - **Privacy:** the real policy PDF is intentionally not in the repo, and no real policy contents are committed. Uploaded PDFs are never written to disk and are freed from memory when the user switches files or after 30 idle minutes (`INSURANCE_RAG_UPLOAD_TTL_MIN`). However, the text of an uploaded policy and each question **are sent to Google's Gemini API**, and on the free tier Google may use that content to improve its products. The app tells users this before they upload; don't use the free tier with documents containing real personal data.
 - **Cost and abuse controls:** every question and upload spends the deployer's Gemini quota, so the app caps uploads (10 MB, 60 pages, 150 chunks), rate-limits questions and uploads per session and app-wide, and limits concurrent upload indexes. The API supports a bearer token (`INSURANCE_RAG_API_TOKEN`; set it for any public deployment), per-client and global rate limits, and a question length cap. All limits are environment variables; see `src/guardrails.py` and the Config section of `src/rag_pipeline.py`.
