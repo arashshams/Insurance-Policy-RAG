@@ -97,12 +97,16 @@ notebooks/
   02_embeddings_and_indexing.ipynb  # building a persistent Chroma index
   03_insurance_policy_rag.ipynb     # end-to-end walkthrough on the shared pipeline
   04_evaluation.ipynb               # notebook runner for src/evaluate.py
-  eval/eval_questions.json          # eval set (12 in-scope, 6 out-of-scope)
+  eval/eval_questions.json          # eval set v1 (12 in-scope, 6 out-of-scope)
   assets/                           # documentation images
 src/
   rag_pipeline.py                   # the shared, importable pipeline
   evaluate.py                       # evaluation harness (CLI: python -m src.evaluate)
+  eval_set.py                       # validates eval sets, renders review tables
   guardrails.py                     # rate limiting + idle-upload cleanup
+eval/
+  questions_v2.json                 # eval set v2: 65 items, categories, pages, reference answers
+  questions_v2_review.md            # generated review table for eval set v2
 tests/                              # offline tests (no API key needed)
 .github/workflows/tests.yml         # CI: lint + offline tests
 .streamlit/config.toml              # Streamlit server settings (upload size cap)

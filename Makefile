@@ -9,7 +9,7 @@
 PYTHON ?= python
 
 .DEFAULT_GOAL := help
-.PHONY: help setup test lint eval run-app run-api restore-index clean
+.PHONY: help setup test lint eval eval-set run-app run-api restore-index clean
 
 help: ## Show targets and the command each one runs
 	@echo "Targets (plain command in brackets):"
@@ -17,6 +17,7 @@ help: ## Show targets and the command each one runs
 	@echo "  test           offline tests, no API key needed    [python -m pytest -q tests/]"
 	@echo "  lint           lint the code                       [python -m ruff check .]"
 	@echo "  eval           evaluation harness (GEMINI_API_KEY)  [python -m src.evaluate]"
+	@echo "  eval-set       validate eval set, rebuild review    [python -m src.eval_set]"
 	@echo "  run-app        Streamlit app on :8501               [python -m streamlit run app/streamlit_app.py]"
 	@echo "  run-api        FastAPI backend on :8000             [python -m uvicorn api.main:app --reload]"
 	@echo "  restore-index  undo local changes to the demo index [git restore app/demo_index]"
@@ -34,6 +35,10 @@ lint:
 # Extra flags pass through, e.g.: make eval ARGS="--no-cache"
 eval:
 	$(PYTHON) -m src.evaluate $(ARGS)
+
+# Validate eval/questions_v2.json and regenerate eval/questions_v2_review.md.
+eval-set:
+	$(PYTHON) -m src.eval_set
 
 run-app:
 	$(PYTHON) -m streamlit run app/streamlit_app.py
