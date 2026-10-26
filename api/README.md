@@ -57,7 +57,9 @@ Response body:
 
 Errors: `401` missing/invalid token (when one is configured), `422` invalid
 body (e.g. an empty or too-long question), `429` rate limited (honor the
-`Retry-After` header), `502` pipeline error, `503` no API key or no index.
+`Retry-After` header), `502` pipeline error, `503` no API key, no index, or
+Gemini still overloaded / rate-limited after the pipeline's retries (with
+`Retry-After: 60`).
 
 ## Run locally
 

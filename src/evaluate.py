@@ -8,7 +8,9 @@ what production serves — or on a PDF of your own (--pdf), to calibrate it.
 
 Metrics (deterministic, no LLM judge):
   * out-of-scope abstention rate   (guardrail: must answer "I don't know")
-  * in-scope retrieval hit rate    (>=1 chunk passed the distance threshold)
+  * how each abstention happened   (distance threshold vs. the model refusing
+                                    to answer from chunks that passed it)
+  * in-scope retrieval hit rate   (>=1 chunk passed the distance threshold)
   * in-scope retrieval page rate   (an expected page was among those chunks)
   * in-scope citation page rate    (the answer cited a chunk on an expected page)
   * in-scope answer-keyword rate   (all expected_keywords appear in the answer)
@@ -21,9 +23,11 @@ Abstention uses rag_pipeline.is_abstention, the same definition as the app/API.
 Free-tier safe: sequential, paced, and cached. The cache key includes the
 question text, index path, model and threshold, so rewording a question or
 switching index/model re-runs that question instead of reusing a stale result.
-Because the default model is a moving alias ("gemini-flash-latest"), cached
-results also expire after --max-age-days, and every record stores the model
-version the API actually reported (model_resolved).
+Scoring is re-applied to cached answers on every run, so editing a question's
+expected_keywords or expected_pages takes effect without new API calls.
+Because the default model is a moving alias ("gemini-flash-latest") and
+Gemini's OpenAI-compatible endpoint doesn't report the version behind it,
+cached results also expire after --max-age-days.
 
 Run from the repo root (needs GEMINI_API_KEY):
     python -m src.evaluate                      # demo index, default cache
@@ -102,6 +106,23 @@ def _normalize_result(out, idk: str) -> dict:
     }
 
 
+def score_record(rec: dict, q: dict) -> dict:
+    """(Re)compute the scoring fields of an in-scope record from the CURRENT
+    question definition. Scoring is applied to cached records on every run,
+    so editing expected_keywords / expected_pages takes effect without
+    re-calling the API (the cache only stores what the pipeline returned)."""
+    if rec["category"] != "in_scope":
+        return rec
+    expected_pages = q.get("expected_pages")
+    rec["keyword_pass"] = contains_keywords(rec["answer"], q.get("expected_keywords", []))
+    rec["retrieval_page_hit"] = page_hit(rec.get("retrieved_pages"), expected_pages)
+    rec["citation_page_hit"] = (
+        None if not expected_pages
+        else (False if rec["abstained"] else page_hit(rec.get("pages"), expected_pages))
+    )
+    return rec
+
+
 def _is_fresh(rec: dict, max_age_s: float | None, now: float) -> bool:
     if max_age_s is None:
         return True
@@ -127,7 +148,8 @@ def run_eval(
     or the legacy (answer, pages, retrieved) tuple, with the collection
     already bound. Kept injectable so the harness itself can be unit-tested
     without an API key. Cached records older than max_age_days are re-run
-    (None = never expire).
+    (None = never expire). Scoring (keywords, pages) is recomputed for cached
+    records too, so edits to the question set's expectations always apply.
     """
     cache = {} if cache is None else cache
     idk = qset.get("idk_answer", rp.IDK_ANSWER)
@@ -138,7 +160,7 @@ def run_eval(
         for q in qset[category]:
             key = _cache_key(q, index_label)
             if key in cache and _is_fresh(cache[key], max_age_s, clock()):
-                rec = cache[key]
+                rec = score_record(cache[key], q)
             else:
                 res = _normalize_result(answer_fn(q["question"]), idk)
                 retrieved = res["retrieved"]
@@ -164,17 +186,7 @@ def run_eval(
                     "model_resolved": res.get("model_resolved"),
                     "evaluated_at": clock(),
                 }
-                if category == "in_scope":
-                    rec["keyword_pass"] = contains_keywords(
-                        res["answer"], q.get("expected_keywords", [])
-                    )
-                    rec["retrieval_page_hit"] = page_hit(
-                        retrieved_pages, q.get("expected_pages"))
-                    rec["citation_page_hit"] = (
-                        None if not q.get("expected_pages")
-                        else (False if rec["abstained"]
-                              else page_hit(res["pages"], q.get("expected_pages")))
-                    )
+                score_record(rec, q)
                 cache[key] = rec
                 if save_cache:
                     save_cache(cache)  # incremental: a crash never loses progress
@@ -188,7 +200,10 @@ def run_eval(
                     f"abstained={rec['abstained']} keyword_pass={rec.get('keyword_pass')} "
                     f"page_hit={rec.get('citation_page_hit')}")
             else:
-                log(f"OUT {rec['id']}: nearest={dist_s} abstained={rec['abstained']}")
+                stopped_by = ("" if not rec["abstained"] else
+                              " (threshold)" if rec["n_retrieved"] == 0 else " (model refused)")
+                log(f"OUT {rec['id']}: nearest={dist_s} retrieved={rec['n_retrieved']} "
+                    f"abstained={rec['abstained']}{stopped_by}")
 
     return records, summarize(records)
 
@@ -238,6 +253,14 @@ def summarize(records: list[dict]) -> dict:
         "in_scope_keyword_fail_ids": [r["id"] for r in calibrated if not r["keyword_pass"]],
         "in_scope_page_miss_ids": [r["id"] for r in paged_cite if not r["citation_page_hit"]],
         "out_of_scope_answered_ids": [r["id"] for r in outs if not r["abstained"]],
+        # How each out-of-scope abstention happened: the distance threshold
+        # (no chunks passed, no LLM call) or the model declining to answer
+        # from chunks that did pass. Both are correct outcomes; the split
+        # shows how much the guardrail depends on each layer.
+        "out_of_scope_threshold_ids": [r["id"] for r in outs
+                                       if r["abstained"] and r["n_retrieved"] == 0],
+        "out_of_scope_model_refused_ids": [r["id"] for r in outs
+                                           if r["abstained"] and r["n_retrieved"] > 0],
         "distance_margin": suggest_threshold(records),
         "models_resolved": models,
     }
@@ -247,7 +270,13 @@ def format_summary(s: dict, index_label: str) -> str:
     pct = lambda x: "n/a" if x is None else f"{x:.0%}"  # noqa: E731
     num = lambda x: "n/a" if x is None else f"{x:.3f}"  # noqa: E731
     m = s["distance_margin"]
-    resolved = ", ".join(s.get("models_resolved") or []) or "not reported"
+    resolved_list = s.get("models_resolved") or []
+    if not resolved_list:
+        resolved = "not reported"
+    elif resolved_list == [rp.GEN_MODEL]:
+        resolved = "exact version not reported by the API"
+    else:
+        resolved = ", ".join(resolved_list)
     lines = [
         f"=== Evaluation summary (index: {index_label}, model: {rp.GEN_MODEL} -> {resolved}) ===",
         f"Out-of-scope abstention rate : {pct(s['out_of_scope_abstention_rate'])}  (target 100%)",
@@ -260,11 +289,24 @@ def format_summary(s: dict, index_label: str) -> str:
         f"{num(m['in_scope_max'])} / {num(m['out_of_scope_min'])}  "
         f"(current threshold {rp.DISTANCE_THRESHOLD})",
     ]
+    n_out = s["n_out_of_scope"]
+    if n_out:
+        lines.append(
+            f"Out-of-scope stopped by threshold / by model refusal : "
+            f"{len(s['out_of_scope_threshold_ids'])} / "
+            f"{len(s['out_of_scope_model_refused_ids'])} of {n_out}")
     if m["separable"]:
         lines.append(f"Suggested threshold (midpoint): {m['suggested_threshold']}")
     elif m["separable"] is False:
-        lines.append("In-scope and out-of-scope distances OVERLAP: no single threshold "
-                     "separates this question set; reword questions or accept some errors.")
+        if s["out_of_scope_answered_ids"]:
+            lines.append("In-scope and out-of-scope distances OVERLAP and some out-of-scope "
+                         "questions were answered: neither the threshold nor the model's "
+                         "refusal caught them. Review those answers and the prompt.")
+        else:
+            lines.append("In-scope and out-of-scope distances OVERLAP, so the threshold alone "
+                         "can't separate this set; the model's refusal caught the rest: "
+                         f"{s['out_of_scope_model_refused_ids']}. Lowering the threshold "
+                         "below the in-scope max would reject real questions.")
     for key, label in (("in_scope_abstained_ids", "In-scope questions that abstained"),
                        ("in_scope_keyword_fail_ids", "In-scope keyword misses"),
                        ("in_scope_page_miss_ids", "In-scope citation page misses"),
@@ -298,10 +340,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if "latest" in rp.GEN_MODEL:
-        print(f"note: '{rp.GEN_MODEL}' is a moving alias; results record the version "
-              "the API reports, and cached results expire after "
-              f"{args.max_age_days:g} days. Pin INSURANCE_RAG_GEN_MODEL for fully "
-              "reproducible runs.")
+        print(f"note: '{rp.GEN_MODEL}' is a moving alias and the API doesn't report which "
+              f"version served it, so cached results expire after {args.max_age_days:g} "
+              "days. Pin INSURANCE_RAG_GEN_MODEL to a specific version for reproducible runs.")
 
     qset = json.loads(Path(args.questions).read_text(encoding="utf-8"))
     if args.pdf:

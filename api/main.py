@@ -48,6 +48,7 @@ if str(REPO_ROOT) not in sys.path:
 from src import guardrails  # noqa: E402 - after sys.path setup
 from src.rag_pipeline import (  # noqa: E402 - after sys.path setup
     K_DEFAULT,
+    GeminiUnavailableError,
     answer_question_detailed,
     load_persistent_collection,
 )
@@ -187,6 +188,12 @@ def ask(
 
     try:
         result = answer_question_detailed(collection, req.question, k=req.k)
+    except GeminiUnavailableError as exc:
+        # Gemini overloaded / rate-limited even after the pipeline's retries:
+        # a temporary condition, so tell the client to come back later.
+        raise HTTPException(
+            status_code=503, detail=str(exc), headers={"Retry-After": "60"}
+        ) from exc
     except Exception as exc:  # noqa: BLE001 - surface pipeline errors as 502
         raise HTTPException(status_code=502, detail=f"Pipeline error: {exc}") from exc
 

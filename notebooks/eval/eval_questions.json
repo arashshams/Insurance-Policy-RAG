@@ -93,12 +93,11 @@
       "id": "in_07",
       "question": "Are emergency medical travel benefits covered under this policy?",
       "expected_keywords": [
-        "travel",
         "emergency",
-        "outside",
-        "age"
+        "travel",
+        "5 million"
       ],
-      "notes": "Section 4 - Emergency medical travel benefits",
+      "notes": "Section 4 - Emergency medical travel benefits: up to $5 million per insured person per incident (p.17). Keywords revised 2026-10-26: the old set ('outside', 'age') failed a correct answer that didn't mention them.",
       "expected_pages": [
         15,
         16,

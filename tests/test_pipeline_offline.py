@@ -442,3 +442,122 @@ def test_api_rate_limit(api_client, monkeypatch):
     assert client.post("/ask", json=body).status_code == 200
     r = client.post("/ask", json=body)
     assert r.status_code == 429 and int(r.headers["Retry-After"]) >= 1
+
+
+# --- transient Gemini errors are retried ------------------------------------------
+def _openai_error(cls, status):
+    import httpx
+
+    req = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
+    return cls("boom", response=httpx.Response(status, request=req), body=None)
+
+
+class _Flaky:
+    """Callable that raises the given errors in order, then returns `result`."""
+
+    def __init__(self, errors, result):
+        self.errors, self.result, self.calls = list(errors), result, 0
+
+    def __call__(self, **_):
+        self.calls += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        return self.result
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    monkeypatch.setattr(rp.time, "sleep", lambda s: None)
+
+
+def test_generation_retries_overload_then_succeeds(monkeypatch, fake_embeddings, no_sleep):
+    import openai
+
+    resp = SimpleNamespace(model=None, choices=[SimpleNamespace(
+        finish_reason="stop", message=SimpleNamespace(content="Covered [doc_0]."))])
+    flaky = _Flaky([_openai_error(openai.InternalServerError, 503),
+                    openai.APIConnectionError(request=None)], resp)
+    monkeypatch.setattr(rp, "get_client", lambda: SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=flaky))))
+    r = rp.answer_question_detailed(_FakeCollection(0.2), "Is physio covered?")
+    assert r["answer"] == "Covered." and flaky.calls == 3
+
+
+def test_embedding_retries_overload(no_sleep):
+    import openai
+
+    data = SimpleNamespace(data=[SimpleNamespace(embedding=[0.1, 0.2])])
+    flaky = _Flaky([_openai_error(openai.InternalServerError, 503)], data)
+    client = SimpleNamespace(embeddings=SimpleNamespace(create=flaky))
+    assert rp.embed_query("q", client=client) == [0.1, 0.2] and flaky.calls == 2
+    flaky2 = _Flaky([_openai_error(openai.RateLimitError, 429)], data)
+    client2 = SimpleNamespace(embeddings=SimpleNamespace(create=flaky2))
+    assert rp.embed_texts(["a"], client=client2) == [[0.1, 0.2]] and flaky2.calls == 2
+
+
+def test_persistent_overload_raises_friendly_error(monkeypatch, no_sleep):
+    import openai
+
+    monkeypatch.setattr(rp, "QUERY_MAX_RETRIES", 2)
+    errors = [_openai_error(openai.InternalServerError, 503) for _ in range(5)]
+    flaky = _Flaky(errors, None)
+    with pytest.raises(rp.GeminiUnavailableError, match="temporarily unavailable"):
+        rp._call_with_backoff(flaky, "generation")
+    assert flaky.calls == 3  # first try + 2 retries
+
+
+def test_non_transient_errors_are_not_retried(no_sleep):
+    import openai
+
+    flaky = _Flaky([_openai_error(openai.AuthenticationError, 401)], "ok")
+    with pytest.raises(openai.AuthenticationError):
+        rp._call_with_backoff(flaky, "generation")
+    assert flaky.calls == 1
+
+
+def test_api_maps_gemini_outage_to_503(api_client, monkeypatch):
+    api_main, client = api_client
+
+    def down(*a, **k):
+        raise rp.GeminiUnavailableError("Gemini is temporarily unavailable")
+    monkeypatch.setattr(api_main, "answer_question_detailed", down)
+    r = client.post("/ask", json={"question": "Is physio covered?"})
+    assert r.status_code == 503 and r.headers["Retry-After"] == "60"
+
+
+# --- evaluation: re-scoring and how abstentions happened ------------------------
+def test_cached_records_are_rescored_with_current_keywords():
+    calls = []
+    fn = lambda q: (calls.append(q), _answer_fn(q))[1]  # noqa: E731
+    cache = {}
+    qset = {**QSET, "in_scope": [{**QSET["in_scope"][0], "expected_keywords": ["dental"]}]}
+    _, s = ev.run_eval(qset, fn, "idx", cache=cache, sleep_between=0, log=lambda _: None)
+    assert s["in_scope_keyword_rate"] == 0.0
+
+    # Fix the expected keywords only: no new API call, and the score changes.
+    _, s = ev.run_eval(QSET, fn, "idx", cache=cache, sleep_between=0, log=lambda _: None)
+    assert len(calls) == 2 and s["in_scope_keyword_rate"] == 1.0
+
+
+def test_summary_separates_threshold_and_model_refusals():
+    def fn(q):
+        if "physio" in q:
+            return {"answer": "Physio is covered.", "pages": [7], "abstained": False,
+                    "retrieved": [{"metadata": {"page": 7}, "score": 0.34}],
+                    "citations_verified": True, "nearest_distance": 0.34}
+        if "France" in q:  # threshold: nothing retrieved
+            return {"answer": "I don't know", "pages": [], "retrieved": [], "abstained": True,
+                    "nearest_distance": 0.50}
+        # near-miss: passed the threshold, model refused
+        return {"answer": "I don't know", "pages": [], "abstained": True,
+                "retrieved": [{"metadata": {"page": 3}, "score": 0.33}], "nearest_distance": 0.33}
+
+    qset = {**QSET, "out_of_scope": QSET["out_of_scope"] + [{"id": "out_02", "question": "Vet bills?"}]}
+    logs = []
+    _, s = ev.run_eval(qset, fn, "idx", sleep_between=0, log=logs.append)
+    assert s["out_of_scope_threshold_ids"] == ["out_01"]
+    assert s["out_of_scope_model_refused_ids"] == ["out_02"]
+    assert s["distance_margin"]["separable"] is False
+    text = ev.format_summary(s, "idx")
+    assert "1 / 1 of 2" in text and "the model's refusal caught the rest" in text
+    assert any("(model refused)" in l for l in logs) and any("(threshold)" in l for l in logs)
