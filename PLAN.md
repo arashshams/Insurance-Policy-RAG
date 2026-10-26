@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-10-26
+Last updated: 2026-10-26 (after M0)
 
 ---
 
@@ -122,7 +122,8 @@ with exponential backoff (`_call_with_backoff`); when retries run out,
 | `notebooks/04_evaluation.ipynb` | Notebook runner for `src/evaluate.py`. |
 | `notebooks/eval/eval_questions.json` | Eval set v1: 12 in-scope + 6 out-of-scope. Each in-scope item has `expected_keywords` and `expected_pages`. |
 | `tests/` | 42 offline tests (pipeline, guardrails, eval harness, API). |
-| `.github/workflows/tests.yml` | CI: `pytest` on push to `master`/`new_dev` and on PRs (Python 3.11). |
+| `.github/workflows/tests.yml` | CI: `ruff check` + `pytest` on push to `master`/`new_dev` and on PRs (Python 3.11). |
+| `Makefile`, `requirements-dev.txt`, `ruff.toml` | Dev tasks (`make help`), pinned test/lint tools, lint config. |
 | `.streamlit/config.toml` | Upload size cap. |
 
 ### Public API of `src/rag_pipeline.py` (use these, don't re-implement)
@@ -193,16 +194,18 @@ is mostly review and running evals (30–90 min). Schedule:
 | 9–11 | M6 |
 | 12 | Final README + resume bullets |
 
-### M0. Housekeeping — `[~]`
+### M0. Housekeeping — `[x]`
 
 Already done before this plan: `PROJECT_CONTEXT.md` removed; Colab badges
 point to `master`; `requirements.txt` pinned.
 
 - [x] `PLAN.md` (this file).
-- [~] Makefile: `setup`, `test`, `lint`, `format`, `eval`, `run-app`,
-  `run-api`, `clean` (each documented with its plain command for Windows
-  users without `make`).
-- [~] `requirements-dev.txt` (pytest, ruff), `ruff.toml`, lint step in CI.
+- [x] Makefile: `help`, `setup`, `test`, `lint`, `eval` (`ARGS=` passes
+  flags), `run-app`, `run-api`, `restore-index`, `clean`; `make help` shows
+  the plain command behind each target. No `format` target on purpose: a
+  repo-wide reformat would bury real changes in diffs.
+- [x] `requirements-dev.txt` (pytest, ruff), `ruff.toml`, lint step in CI.
+- [x] README "Getting started" uses the Makefile and lists the plain commands.
 
 Acceptance: `make setup test lint` works on Linux/macOS and in CI; README
 "Getting started" mentions the Makefile and the plain commands.
@@ -348,4 +351,7 @@ sections. 2–3 resume bullets, describing only what was built.
   answers; reports threshold vs model-refusal abstentions; `in_07` keywords
   fixed; README results + two-layer guardrail explanation; eval cache
   git-ignored. Owner's eval run: all metrics 100% (see section 4).
-- **2026-10-26 — branch `m0-housekeeping`.** Added this `PLAN.md`.
+- **2026-10-26 — branch `m0-housekeeping`.** Added this `PLAN.md`. M0:
+  Makefile, `requirements-dev.txt` (pytest 8.3.3, ruff 0.6.9), `ruff.toml`
+  (defaults + intentional E402 exceptions), lint step in CI, README setup
+  section. **Next: M1a** (eval set v2; propose the plan first).
