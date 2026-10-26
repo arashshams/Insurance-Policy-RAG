@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-10-26 (after M0)
+Last updated: 2026-10-26 (M1a built, in owner review)
 
 ---
 
@@ -120,7 +120,9 @@ with exponential backoff (`_call_with_backoff`); when retries run out,
 | `notebooks/01`–`02` | Ingestion / indexing walkthroughs (still contain their own code; see backlog). |
 | `notebooks/03_insurance_policy_rag.ipynb` | End-to-end walkthrough; imports the shared module. |
 | `notebooks/04_evaluation.ipynb` | Notebook runner for `src/evaluate.py`. |
-| `notebooks/eval/eval_questions.json` | Eval set v1: 12 in-scope + 6 out-of-scope. Each in-scope item has `expected_keywords` and `expected_pages`. |
+| `notebooks/eval/eval_questions.json` | Eval set v1: 12 in-scope + 6 out-of-scope. Each in-scope item has `expected_keywords` and `expected_pages`. Still what the harness runs until M1b. |
+| `eval/questions_v2.json`, `eval/questions_v2_review.md` | Eval set v2 (65 items, see M1a) and its generated review table. |
+| `src/eval_set.py` | Load/validate eval sets, check evidence against an index, render review tables. |
 | `tests/` | 42 offline tests (pipeline, guardrails, eval harness, API). |
 | `.github/workflows/tests.yml` | CI: `ruff check` + `pytest` on push to `master`/`new_dev` and on PRs (Python 3.11). |
 | `Makefile`, `requirements-dev.txt`, `ruff.toml` | Dev tasks (`make help`), pinned test/lint tools, lint config. |
@@ -168,12 +170,14 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | ID | Decision | Why | Status |
 | --- | --- | --- | --- |
 | D1 | Keep the distance threshold at **0.37**. | Latest run: near-miss out-of-scope questions overlap real ones (0.335 vs up to 0.344); lowering the cutoff would reject real questions. The model's refusal handles near-misses ("two-layer guardrail"). | Decided |
-| D2 | Raw eval cache `notebooks/eval/eval_results.json` stays git-ignored; commit a **versioned summary per run** instead (`eval/reports/<set-version>_<date>.md` + small metrics JSON). | Satisfies rule 5 without churning a large cache file. | Proposed, awaiting owner confirmation |
-| D3 | **M4 option (a):** upload mode keeps running inside the Streamlit process; the deployed API serves the bundled demo policy. | Cloud hosts may run several instances and stop idle ones, so per-session in-memory indexes on the API would vanish or hit the wrong instance. Alternatives: (b) single-instance API with expiring upload session IDs, (c) re-embed per request (private but costly). | Proposed, awaiting owner confirmation |
+| D2 | Raw eval cache `notebooks/eval/eval_results.json` stays git-ignored; commit a **versioned summary per run** instead (`eval/reports/<set-version>_<date>.md` + small metrics JSON). | Satisfies rule 5 without churning a large cache file. | Decided (owner, 2026-10-26) |
+| D3 | **M4 option (a):** upload mode keeps running inside the Streamlit process; the deployed API serves the bundled demo policy. | Cloud hosts may run several instances and stop idle ones, so per-session in-memory indexes on the API would vanish or hit the wrong instance. Alternatives: (b) single-instance API with expiring upload session IDs, (c) re-embed per request (private but costly). | Decided (owner, 2026-10-26) |
 | D4 | LLM judge uses a **pinned** model version, ideally different from the generator. | `-latest` aliases make judge scores drift; a different model reduces self-grading bias. Judge agreement is spot-checked by hand. | Proposed (part of M1 plan) |
 | D5 | MLflow **wraps the existing harness** (logs its config + metrics) instead of a second eval path. | Rule 4 / single source of metrics. | Proposed (part of M3 plan) |
 | D6 | Threshold/k sweeps reuse cached query embeddings and passage distances; only configurations that change what is retrieved need new generation calls. | Stay inside free-tier limits. | Proposed (part of M3 plan) |
 | D7 | Lint with **ruff** (pinned in `requirements-dev.txt`), config in `ruff.toml`; notebooks excluded from lint. | Fast, one tool; notebooks contain Colab shell/magic lines. | Done in M0 |
+| D8 | Questions whose answer the policy defers to the Schedule of Benefits (not in the document) have behaviour **`defer`**: the correct answer says the amount is in the Schedule of Benefits and cites that passage; "I don't know" counts as wrong. | More helpful than abstaining, and it's a real case (v1's original `in_02`). | Decided (owner, 2026-10-26) |
+| D9 | The eval set is validated like code (`src/eval_set.py` + `tests/test_eval_set.py`): schema, every evidence phrase present on its stated page of the demo index, review table in sync, all v1 questions carried over unchanged. | Ground truth for every quality claim; catches typos and wrong pages before they become wrong metrics. | Done in M1a |
 
 ## 6. Milestones
 
@@ -210,23 +214,35 @@ point to `master`; `requirements.txt` pinned.
 Acceptance: `make setup test lint` works on Linux/macOS and in CI; README
 "Getting started" mentions the Makefile and the plain commands.
 
-### M1. Evaluation 2.0 (highest priority) — `[ ]`
+### M1. Evaluation 2.0 (highest priority) — `[~]`
 
-**M1a — eval set v2 (data only).**
-- New versioned file `eval/questions_v2.json` (v1 stays in place until the
-  harness switches over), ~60 items.
-- Each item: `id`, `category`, `question`, `expected_pages`,
-  `reference_answer` (short, written from the sample policy), optional
-  `expected_keywords`, `notes`. Out-of-scope items: `category` plus
-  `notes`; expected answer is "I don't know".
-- Categories: `direct_fact`, `paraphrase`, `numeric`, `multi_part`,
-  `multi_chunk` (answer spans passages/pages), `near_miss_oos`,
-  `clear_oos`, `adversarial` (e.g. "ignore the policy and ..." or
-  prompt-injection style questions).
-- Pages and facts verified against the demo index text
-  (`app/demo_index/chroma.sqlite3`, table `embedding_metadata`, key
-  `chroma:document`; page in key `page`).
-- Owner reviews every question and reference answer (this is ground truth).
+**M1a — eval set v2 (data only).** `[~]` built on branch `m1a-eval-set-v2`;
+waiting for the owner's review of the ground truth.
+- [x] `eval/questions_v2.json`: 65 items (42 answer, 5 defer, 18 abstain).
+  All 18 v1 questions carried over unchanged with `v1_id`; v1 file stays
+  in place until the harness switches over in M1b.
+- [x] Item schema: `id`, `category`, `behavior` (`answer` / `defer` /
+  `abstain`, see D8), `question`, and for answer/defer items
+  `expected_pages`, `reference_answer`, `evidence` (list of
+  `{page, text}` phrases quoted from the policy), `expected_keywords`;
+  optional `v1_id`, `notes`. Abstain items carry no pages/answer/evidence.
+- [x] Categories (count): `direct_fact` 10, `paraphrase` 8, `numeric` 9,
+  `multi_part` 6, `multi_chunk` 6, `deferred` 4, `near_miss_oos` 8,
+  `clear_oos` 6, `adversarial` 8 (injection, false premises, advice or
+  action requests; their expected behaviour varies per item).
+- [x] `src/eval_set.py`: load/validate, evidence check against an index,
+  review-table rendering; CLI `python -m src.eval_set` (`--check` in CI
+  style). `make eval-set` runs it.
+- [x] `eval/questions_v2_review.md`: generated review table (don't edit by
+  hand).
+- [x] `tests/test_eval_set.py` (D9).
+- [ ] Owner reviews every question and reference answer (ground truth);
+  apply corrections, regenerate the review table, merge.
+
+Notes for M1b: v1 ids are kept in `v1_id` so v1 and v2 results can be
+compared; the evidence phrases are what "cited pages contain the answer"
+should be checked against; `adversarial` items must be scored by their
+`behavior`, not by category.
 
 **M1b — judge-free metrics + report.**
 - Abstention precision/recall (positive class = "should abstain").
@@ -355,3 +371,9 @@ sections. 2–3 resume bullets, describing only what was built.
   Makefile, `requirements-dev.txt` (pytest 8.3.3, ruff 0.6.9), `ruff.toml`
   (defaults + intentional E402 exceptions), lint step in CI, README setup
   section. **Next: M1a** (eval set v2; propose the plan first).
+- **2026-10-26 — PR #21 (merged).** `PLAN.md` + M0. Owner decisions:
+  D2 and D3 confirmed; D8 (`defer` behaviour) adopted.
+- **2026-10-26 — branch `m1a-eval-set-v2`.** Eval set v2 (65 items), its
+  validator and review table, 12 new offline tests (54 total). Awaiting the
+  owner's ground-truth review. **Next: M1b** (judge-free metrics + report);
+  propose the plan first.
