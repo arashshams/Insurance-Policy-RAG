@@ -9,7 +9,26 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-10-26 (M1a built, in owner review)
+Last updated: 2026-10-26 (M1a merged; paused before M1b, see "Where we are")
+
+---
+
+## Where we are (read this first when resuming)
+
+- **Status (2026-10-26):** M0 (PR #21) and M1a (PR #22, eval set v2) are
+  merged. The owner paused the work here.
+- **Next step: M1b.** Propose the plan first and wait for approval. Scope:
+  the harness runs eval set v2 (`eval/questions_v2.json`) and reports
+  abstention precision/recall (by `behavior`, including `defer`), retrieval
+  hit rate and recall@k against `expected_pages`, citation accuracy checked
+  against the `evidence` phrases, and a per-category markdown report.
+  Keep v1 runnable until v2 replaces it in the README.
+- **Owner runs anything that calls Gemini** (no key in agent sessions);
+  design each step as one command (`make eval ...`).
+- **Push access:** the agent session used so far could not push to the repo
+  (git proxy 403 even after the repo was added to the session); commits were
+  delivered as `git am` mailbox files and pushed by the owner. Check push
+  access at the start of a new session (`git push --dry-run`).
 
 ---
 
@@ -214,10 +233,9 @@ point to `master`; `requirements.txt` pinned.
 Acceptance: `make setup test lint` works on Linux/macOS and in CI; README
 "Getting started" mentions the Makefile and the plain commands.
 
-### M1. Evaluation 2.0 (highest priority) — `[~]`
+### M1. Evaluation 2.0 (highest priority) — `[~]` (M1a done; M1b–M1d next)
 
-**M1a — eval set v2 (data only).** `[~]` built on branch `m1a-eval-set-v2`;
-waiting for the owner's review of the ground truth.
+**M1a — eval set v2 (data only).** `[x]` merged as PR #22.
 - [x] `eval/questions_v2.json`: 65 items (42 answer, 5 defer, 18 abstain).
   All 18 v1 questions carried over unchanged with `v1_id`; v1 file stays
   in place until the harness switches over in M1b.
@@ -236,8 +254,9 @@ waiting for the owner's review of the ground truth.
 - [x] `eval/questions_v2_review.md`: generated review table (don't edit by
   hand).
 - [x] `tests/test_eval_set.py` (D9).
-- [ ] Owner reviews every question and reference answer (ground truth);
-  apply corrections, regenerate the review table, merge.
+- [x] Owner merged PR #22; no corrections were requested. Later
+  corrections: edit `eval/questions_v2.json`, run `make eval-set` and
+  `make test`, commit both files.
 
 Notes for M1b: v1 ids are kept in `v1_id` so v1 and v2 results can be
 compared; the evidence phrases are what "cited pages contain the answer"
@@ -373,7 +392,9 @@ sections. 2–3 resume bullets, describing only what was built.
   section. **Next: M1a** (eval set v2; propose the plan first).
 - **2026-10-26 — PR #21 (merged).** `PLAN.md` + M0. Owner decisions:
   D2 and D3 confirmed; D8 (`defer` behaviour) adopted.
-- **2026-10-26 — branch `m1a-eval-set-v2`.** Eval set v2 (65 items), its
-  validator and review table, 12 new offline tests (54 total). Awaiting the
-  owner's ground-truth review. **Next: M1b** (judge-free metrics + report);
-  propose the plan first.
+- **2026-10-26 — PR #22 (merged).** M1a: eval set v2 (65 items: 42
+  answer, 5 defer, 18 abstain; all v1 questions carried over), its
+  validator (`src/eval_set.py`) and generated review table, 12 new offline
+  tests (54 total). Merged by the owner; no corrections requested.
+- **2026-10-26 — paused.** Owner taking a break; `PLAN.md` progress
+  committed directly to `master`. **Next: M1b** (propose the plan first).
