@@ -9,20 +9,33 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-10-27 (M1b implemented on branch `m1b-eval-v2-metrics`; see "Where we are")
+Last updated: 2026-10-27 (M1b merged; first v2 run spread over ~3 days; paused, see "Where we are")
 
 ---
 
 ## Where we are (read this first when resuming)
 
-- **Status (2026-10-27):** M0 (PR #21) and M1a (PR #22, eval set v2) are
-  merged. M1b (judge-free metrics + report on eval set v2) is implemented on
-  branch `m1b-eval-v2-metrics`, plan approved by the owner.
-- **Owner to do for M1b:** `make test lint` (the agent session could not run
-  the test suite), open the PR, then run `make eval` once and
-  `make restore-index`. The first v2 report lands in `eval/reports/`; it is
-  committed with the failure analysis in M1d.
-- **Next step after that: M1c** (LLM-as-judge). Propose the plan first.
+- **Status (2026-10-27):** M0 (PR #21), M1a (PR #22) and M1b (PR #23,
+  judge-free metrics + report on eval set v2; 71 offline tests pass) are
+  merged. The owner paused the work here.
+- **First v2 run in progress, spread over ~3 days** (owner's choice, D13):
+  the Gemini free tier allows only **20 generation requests per day** for
+  the model behind `gemini-flash-latest` (`gemini-3.8-flash` on
+  2026-10-27). Day 1 stopped on the daily quota after 8/65 items (all 8
+  passed; cached in `eval/questions_v2_results.json`). The owner runs
+  `make eval` once a day; each run resumes from the cache. Then
+  `make restore-index`. When all 65 are done, the owner pastes the summary
+  and the report (`eval/reports/v2.0_<date>.md`).
+- **Next items when the owner is back (propose plans first):**
+  1. Small fix: fail fast on a *daily*-quota 429 (`RESOURCE_EXHAUSTED`,
+     long `retryDelay`) instead of retrying 5x with backoff on top of the
+     `openai` client's own retries (day 1 hung ~15 minutes before failing);
+     print "daily quota reached, N/65 done, run again after the reset".
+  2. Review the full v2 report and failures (feeds M1d).
+  3. M1c (LLM-as-judge), planned with the 20/day budget in mind (D13).
+- **Check:** whether the live Streamlit app uses the same Gemini key as the
+  evaluation. If so, an eval run can exhaust the demo's daily quota; give
+  evaluations their own key/project.
 - **Owner runs anything that calls Gemini** (no key in agent sessions);
   design each step as one command (`make eval ...`).
 - **Push access:** the agent session used so far could not push to the repo
@@ -181,7 +194,11 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 - 0.37 is calibrated on one sample policy only; uploads use
   `INSURANCE_RAG_UPLOAD_THRESHOLD` (defaults to 0.37) and the UI warns about it.
 - `gemini-flash-latest` is a moving alias and the endpoint does not report
-  the version behind it; eval cache entries expire after 14 days.
+  the version behind it; eval cache entries expire after 14 days. (A 429
+  quota error on 2026-10-27 named the model behind it: `gemini-3.8-flash`.)
+- **Free-tier quota: 20 generation requests per day** for that model. A full
+  v2 run needs up to ~60 generation calls (threshold abstentions need none),
+  so it takes ~3 days on the free tier. See D13.
 - Eval set v1 is small (18 questions), single policy, keyword-based scoring.
 - Pinned deps are old (`openai==1.14.3`, `chromadb==0.4.24`,
   `httpx==0.27.2` held back for openai compatibility).
@@ -201,6 +218,7 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | D10 | **Recall@k is measured on evidence phrases**, not on `expected_pages`: the share of an item's evidence phrases inside the retrieved chunks (after and before the threshold). Page hit@k uses `expected_pages`. | `expected_pages` lists acceptable pages (any one may hold the answer), so recall against all of them would penalize correct retrievals; every evidence phrase is text the answer needs. | Done in M1b |
 | D11 | **Item pass** = correct behaviour + (for answer/defer) a cited chunk contains an evidence phrase. A correct `defer` is an answer that mentions "Schedule of Benefits" and cites the deferring passage. Citation metrics count only answered items; a citation-less answer (pipeline's page fallback) counts as no citation. | Judge-free proxy for "grounded and on target"; content correctness is M1c's job. | Done in M1b (owner approved) |
 | D12 | `make eval` runs **v2** by default; v1 stays runnable (`make eval-v1`, own cache). Each set has its own git-ignored answer cache (`eval/questions_v2_results.json`). Reports for `--pdf` runs go next to the results file, never into `eval/reports/`. | v2 is the new ground truth; separate caches never mix; private-policy answers stay out of the repo (rule 2). | Done in M1b (owner approved) |
+| D13 | **Free-tier eval budget:** the first full v2 run is spread over ~3 days (resumable cache) rather than enabling billing or switching to a model with a higher free limit. Open question for M1c–M3: the judge, PR smoke evals and sweeps multiply calls, so each needs either a small daily budget or an optional, documented paid eval key (rule 1). A cheaper model is not used for headline numbers, since it would not measure what the app ships. | 20 generation requests/day on the free tier (2026-10-27). | Decided for the v2 run (owner, 2026-10-27); revisit in M1c plan |
 | D9 | The eval set is validated like code (`src/eval_set.py` + `tests/test_eval_set.py`): schema, every evidence phrase present on its stated page of the demo index, review table in sync, all v1 questions carried over unchanged. | Ground truth for every quality claim; catches typos and wrong pages before they become wrong metrics. | Done in M1a |
 
 ## 6. Milestones
@@ -238,7 +256,7 @@ point to `master`; `requirements.txt` pinned.
 Acceptance: `make setup test lint` works on Linux/macOS and in CI; README
 "Getting started" mentions the Makefile and the plain commands.
 
-### M1. Evaluation 2.0 (highest priority) — `[~]` (M1a done; M1b on branch; M1c–M1d next)
+### M1. Evaluation 2.0 (highest priority) — `[~]` (M1a, M1b done; first v2 run in progress; M1c–M1d next)
 
 **M1a — eval set v2 (data only).** `[x]` merged as PR #22.
 - [x] `eval/questions_v2.json`: 65 items (42 answer, 5 defer, 18 abstain).
@@ -268,8 +286,8 @@ compared; the evidence phrases are what "cited pages contain the answer"
 should be checked against; `adversarial` items must be scored by their
 `behavior`, not by category.
 
-**M1b — judge-free metrics + report.** `[~]` implemented on branch
-`m1b-eval-v2-metrics`; waiting for the owner's test run, PR and first eval run.
+**M1b — judge-free metrics + report.** `[x]` merged as PR #23 (two
+commits: the feature and a log-wording fix for an existing test).
 - [x] One scoring path: `eval_set.items_of()` turns v1 into v2-shaped items
   (`in_scope` -> answer, `out_of_scope` -> abstain); items are scored by
   `behavior`, never by category.
@@ -289,13 +307,18 @@ should be checked against; `adversarial` items must be scored by their
 - [x] Validator: every evidence phrase lies inside one chunk
   (`check_evidence_in_chunks`, tested on the demo index; all 53 do).
 - [x] Offline tests (17 new), README, notebook 04, `make help`.
-- [ ] Owner: `make test lint`, merge, run `make eval`.
+- [x] Owner: `make test lint` (71 passed, ruff clean), merged PR #23.
+- [~] First full v2 run: over ~3 days because of the free-tier quota (D13);
+  8/65 done on day 1.
 
 **M1c — LLM-as-judge.**
 - Faithfulness (answer supported by retrieved text) and correctness (vs
   `reference_answer`), integer scale with rubric; prompt versioned in a file
   (e.g. `eval/prompts/judge_v1.md`).
 - Pinned judge model (D4); judge calls cached and paced like the rest.
+- Budget: each judged item costs extra generation calls on top of the
+  answer, against a free tier of 20 generation requests/day (D13); the plan
+  must say how a judged run fits (daily batches, a sample, or a paid key).
 - Hand-scoring sheet for ~20 sampled items; report judge–human agreement.
 
 **M1d — committed report + failure analysis.**
@@ -430,3 +453,12 @@ sections. 2–3 resume bullets, describing only what was built.
   Decisions D10–D12. The agent could not run pytest in its session (lint
   passed); owner to run `make test`. Push still unavailable: delivered as a
   `git am` mailbox. **Next: owner runs `make eval`; then M1c.**
+- **2026-10-27 — PR #23 (merged).** M1b plus one fix commit: the new log
+  line said "(model)" where an existing test expects "(model refused)".
+  Owner ran `make test lint`: 71 passed, ruff clean.
+- **2026-10-27 — first v2 run, day 1.** `make eval` stopped on the free
+  tier's daily limit (20 generation requests/day, model `gemini-3.8-flash`)
+  after 8/65 items, all passed; it hung ~15 min in retries before failing.
+  Owner chose to spread the run over ~3 days (D13). **Paused.** Next: owner
+  finishes the run with daily `make eval`; then the fail-fast quota fix,
+  the v2 report review, and M1c (propose plans first).
