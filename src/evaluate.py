@@ -171,7 +171,8 @@ _TAG = {"answer": "ANS", "defer": "DEF", "abstain": "ABS"}
 def _log_line(rec: dict) -> str:
     dist = rec.get("nearest_distance")
     dist_s = "n/a" if dist is None else f"{dist:.3f}"
-    how = f" ({rec['abstention_layer']})" if rec.get("abstained") else ""
+    how = ((" (threshold)" if rec["abstention_layer"] == "threshold" else " (model refused)")
+           if rec.get("abstained") else "")
     verdict = "pass" if rec["item_pass"] else "FAIL: " + "; ".join(rec["fail_reasons"])
     return (f"{_TAG.get(rec['behavior'], rec['behavior'])} {rec['id']}: nearest={dist_s} "
             f"retrieved={rec['n_retrieved']} abstained={rec['abstained']}{how} {verdict}")
