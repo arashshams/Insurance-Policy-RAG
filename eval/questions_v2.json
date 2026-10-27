@@ -3,7 +3,7 @@
   "created": "2026-10-26",
   "source_document": "Manulife FlexCare SAMPLE policy (32 pages), as indexed in app/demo_index",
   "idk_answer": "I don't know",
-  "description": "Evaluation set v2. Supersedes notebooks/eval/eval_questions.json (v1) once the harness switches over in M1b; every v1 question is carried over and keeps its v1 id in `v1_id`. Ground truth was drafted from the demo index text and reviewed by the project owner. Evidence phrases are checked against the index by tests/test_eval_set_v2.py.",
+  "description": "Evaluation set v2. Supersedes notebooks/eval/eval_questions.json (v1) once the harness switches over in M1b; every v1 question is carried over and keeps its v1 id in `v1_id`. Ground truth was drafted from the demo index text and reviewed by the project owner. Evidence phrases are checked against the index by tests/test_eval_set.py.",
   "behaviors": {
     "answer": "Answer from the policy and cite a passage on one of expected_pages.",
     "defer": "The policy defers the specific amount or detail to the Schedule of Benefits (not part of this document). A correct answer says so and cites the deferring passage; 'I don't know' is wrong.",

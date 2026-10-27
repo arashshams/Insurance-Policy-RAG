@@ -1,46 +1,52 @@
 """
 evaluate.py — evaluation harness for Insurance-Policy-RAG.
 
-Runs the question set in notebooks/eval/eval_questions.json against the SAME
-pipeline code the app and API ship (src/rag_pipeline.py), on any Chroma
-index — by default the bundled demo index at app/demo_index/, i.e. exactly
-what production serves — or on a PDF of your own (--pdf), to calibrate it.
+Runs an eval set — by default eval/questions_v2.json (65 items) — against the
+SAME pipeline code the app and API ship (src/rag_pipeline.py), on any Chroma
+index: by default the bundled demo index at app/demo_index/, i.e. exactly what
+production serves, or a PDF of your own (--pdf), to calibrate it. The v1 set
+(notebooks/eval/eval_questions.json) still runs with --questions.
 
-Metrics (deterministic, no LLM judge):
-  * out-of-scope abstention rate   (guardrail: must answer "I don't know")
-  * how each abstention happened   (distance threshold vs. the model refusing
-                                    to answer from chunks that passed it)
-  * in-scope retrieval hit rate   (>=1 chunk passed the distance threshold)
-  * in-scope retrieval page rate   (an expected page was among those chunks)
-  * in-scope citation page rate    (the answer cited a chunk on an expected page)
-  * in-scope answer-keyword rate   (all expected_keywords appear in the answer)
-  * in-scope wrongful abstentions  (listed by id)
-  * distance margin                (largest in-scope vs smallest out-of-scope
-                                    nearest-chunk distance, measured BEFORE the
-                                    threshold) and a suggested threshold
+Each item is scored by its expected behaviour (answer / defer / abstain); the
+metric definitions live in src/eval_metrics.py. All metrics are deterministic
+(no LLM judge yet):
+  * abstention precision / recall ("should abstain" = positive class), and
+    whether each abstention came from the distance threshold or the model
+  * retrieval hit rate, page hit@k, and recall@k of the evidence phrases
+    (before and after the threshold)
+  * citation accuracy: cited pages vs expected_pages, and whether the cited
+    passages contain the item's evidence phrases
+  * keyword rate, per-item pass/fail with reasons, per-behaviour and
+    per-category breakdowns, and the in-scope vs out-of-scope distance margin
 Abstention uses rag_pipeline.is_abstention, the same definition as the app/API.
+
+Each run prints a summary and writes a markdown report plus a metrics JSON
+(default eval/reports/<set version>_<date>.md/.json; see src/eval_report.py).
 
 Free-tier safe: sequential, paced, and cached. The cache key includes the
 question text, index path, model and threshold, so rewording a question or
 switching index/model re-runs that question instead of reusing a stale result.
-Scoring is re-applied to cached answers on every run, so editing a question's
-expected_keywords or expected_pages takes effect without new API calls.
+Scoring is re-applied to cached answers on every run, so editing an item's
+expected pages, keywords or evidence takes effect without new API calls.
 Because the default model is a moving alias ("gemini-flash-latest") and
 Gemini's OpenAI-compatible endpoint doesn't report the version behind it,
 cached results also expire after --max-age-days.
 
 Run from the repo root (needs GEMINI_API_KEY):
-    python -m src.evaluate                      # demo index, default cache
-    python -m src.evaluate --index path/to/chroma --no-cache
-    python -m src.evaluate --pdf my_policy.pdf --questions my_questions.json \
-        --results my_results.json               # calibrate a new policy
+    python -m src.evaluate                      # eval set v2 on the demo index
+    python -m src.evaluate --questions notebooks/eval/eval_questions.json   # v1
+    python -m src.evaluate --no-cache           # fresh answers for everything
+    python -m src.evaluate --pdf my_policy.pdf --questions my_questions.json
+                                                # calibrate a new policy
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import hashlib
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -50,35 +56,40 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src import eval_metrics as em  # noqa: E402
+from src import eval_report as er  # noqa: E402
+from src import eval_set as es  # noqa: E402
 from src import rag_pipeline as rp  # noqa: E402
 
-DEFAULT_QUESTIONS = REPO_ROOT / "notebooks" / "eval" / "eval_questions.json"
-DEFAULT_RESULTS = REPO_ROOT / "notebooks" / "eval" / "eval_results.json"
+V2_QUESTIONS = REPO_ROOT / "eval" / "questions_v2.json"
+V1_QUESTIONS = REPO_ROOT / "notebooks" / "eval" / "eval_questions.json"
+V1_RESULTS = REPO_ROOT / "notebooks" / "eval" / "eval_results.json"
+DEFAULT_QUESTIONS = V2_QUESTIONS
 DEFAULT_INDEX = REPO_ROOT / "app" / "demo_index"
+REPORTS_DIR = REPO_ROOT / "eval" / "reports"
 DEFAULT_MAX_AGE_DAYS = 14.0
 
 
-# --- scoring helpers ---------------------------------------------------------
-def contains_keywords(answer: str, keywords: list[str]) -> bool | None:
-    """True if every expected keyword appears in the answer (case-insensitive).
-    None if no real keywords are set yet (still the "TODO" placeholder)."""
-    kws = [k for k in keywords if k and k != "TODO"]
-    if not kws:
-        return None
-    a = answer.lower()
-    return all(k.lower() in a for k in kws)
+def results_path_for(questions_path: str | Path) -> Path:
+    """Default answer cache for a question set: v1 keeps its historical file
+    (notebooks/eval/eval_results.json); any other set gets
+    <questions stem>_results.json next to it (git-ignored for eval/)."""
+    q = Path(questions_path).resolve()
+    if q == V1_QUESTIONS.resolve():
+        return V1_RESULTS
+    return q.with_name(q.stem + "_results.json")
+
+
+DEFAULT_RESULTS = results_path_for(DEFAULT_QUESTIONS)
+
+# Kept for callers of the v1 API (scoring helpers now live in eval_metrics).
+contains_keywords = em.contains_keywords
+page_hit = em.page_hit
 
 
 def is_abstention(answer: str, idk: str = rp.IDK_ANSWER) -> bool:
     """Shared abstention definition (delegates to the pipeline's)."""
     return rp.is_abstention(answer, idk)
-
-
-def page_hit(pages, expected_pages) -> bool | None:
-    """True if any expected page is in `pages`; None if none are specified."""
-    if not expected_pages:
-        return None
-    return bool(set(pages or []) & set(expected_pages))
 
 
 def _cache_key(q: dict, index_label: str) -> str:
@@ -106,21 +117,10 @@ def _normalize_result(out, idk: str) -> dict:
     }
 
 
-def score_record(rec: dict, q: dict) -> dict:
-    """(Re)compute the scoring fields of an in-scope record from the CURRENT
-    question definition. Scoring is applied to cached records on every run,
-    so editing expected_keywords / expected_pages takes effect without
-    re-calling the API (the cache only stores what the pipeline returned)."""
-    if rec["category"] != "in_scope":
-        return rec
-    expected_pages = q.get("expected_pages")
-    rec["keyword_pass"] = contains_keywords(rec["answer"], q.get("expected_keywords", []))
-    rec["retrieval_page_hit"] = page_hit(rec.get("retrieved_pages"), expected_pages)
-    rec["citation_page_hit"] = (
-        None if not expected_pages
-        else (False if rec["abstained"] else page_hit(rec.get("pages"), expected_pages))
-    )
-    return rec
+def score_record(rec: dict, q: dict, chunk_texts: dict[str, str] | None = None) -> dict:
+    """(Re)compute a record's scoring fields from the CURRENT item definition
+    (see eval_metrics.score_record)."""
+    return em.score_record(rec, q, chunk_texts)
 
 
 def _is_fresh(rec: dict, max_age_s: float | None, now: float) -> bool:
@@ -128,6 +128,53 @@ def _is_fresh(rec: dict, max_age_s: float | None, now: float) -> bool:
         return True
     ts = rec.get("evaluated_at")
     return isinstance(ts, (int, float)) and now - ts <= max_age_s
+
+
+def _record_from_result(q: dict, res: dict, index_label: str, now: float) -> dict:
+    """What gets cached for one question: the pipeline's output, no scoring and
+    no chunk text (so a private policy's cache holds only answers and ids)."""
+    retrieved = res.get("retrieved") or []
+    candidates = res.get("candidates")
+    return {
+        "id": q["id"], "question": q["question"],
+        "answer": res["answer"], "pages": res.get("pages") or [],
+        "cited_ids": list(res.get("cited_ids") or []),
+        "retrieved_ids": [r.get("id") for r in retrieved if r.get("id") is not None],
+        "retrieved_pages": sorted({
+            r.get("metadata", {}).get("page") for r in retrieved
+            if r.get("metadata", {}).get("page") is not None
+        }),
+        "n_retrieved": len(retrieved),
+        # every top-k chunk BEFORE the threshold: id, page, distance (no text)
+        "candidates": None if candidates is None else [
+            {"id": c.get("id"), "page": c.get("page"), "distance": c.get("distance")}
+            for c in candidates
+        ],
+        # closest chunk BEFORE thresholding (calibration signal)
+        "nearest_distance": res.get("nearest_distance"),
+        # closest chunk that PASSED the threshold (legacy field)
+        "top_distance": min(
+            (r["score"] for r in retrieved if r.get("score") is not None), default=None,
+        ),
+        "abstained": bool(res["abstained"]),
+        "citations_verified": res.get("citations_verified"),
+        "finish_reason": res.get("finish_reason"),
+        "index": index_label, "model": rp.GEN_MODEL,
+        "model_resolved": res.get("model_resolved"),
+        "evaluated_at": now,
+    }
+
+
+_TAG = {"answer": "ANS", "defer": "DEF", "abstain": "ABS"}
+
+
+def _log_line(rec: dict) -> str:
+    dist = rec.get("nearest_distance")
+    dist_s = "n/a" if dist is None else f"{dist:.3f}"
+    how = f" ({rec['abstention_layer']})" if rec.get("abstained") else ""
+    verdict = "pass" if rec["item_pass"] else "FAIL: " + "; ".join(rec["fail_reasons"])
+    return (f"{_TAG.get(rec['behavior'], rec['behavior'])} {rec['id']}: nearest={dist_s} "
+            f"retrieved={rec['n_retrieved']} abstained={rec['abstained']}{how} {verdict}")
 
 
 # --- core --------------------------------------------------------------------
@@ -141,81 +188,52 @@ def run_eval(
     log: Callable[[str], None] = print,
     max_age_days: float | None = DEFAULT_MAX_AGE_DAYS,
     clock: Callable[[], float] = time.time,
+    chunk_texts: dict[str, str] | None = None,
 ) -> tuple[list[dict], dict]:
     """Run every question through answer_fn and return (records, summary).
 
+    qset is a v2 eval set or a v1 one (converted by eval_set.items_of).
     answer_fn(question) -> answer_question_detailed()-style dict (preferred)
     or the legacy (answer, pages, retrieved) tuple, with the collection
     already bound. Kept injectable so the harness itself can be unit-tested
     without an API key. Cached records older than max_age_days are re-run
-    (None = never expire). Scoring (keywords, pages) is recomputed for cached
-    records too, so edits to the question set's expectations always apply.
+    (None = never expire). Scoring is recomputed for cached records too, so
+    edits to the set's expectations always apply. chunk_texts (chunk id ->
+    text of the evaluated index) enables the evidence metrics.
     """
     cache = {} if cache is None else cache
     idk = qset.get("idk_answer", rp.IDK_ANSWER)
     max_age_s = None if max_age_days is None else max_age_days * 86400
     records: list[dict] = []
 
-    for category in ("in_scope", "out_of_scope"):
-        for q in qset[category]:
-            key = _cache_key(q, index_label)
-            if key in cache and _is_fresh(cache[key], max_age_s, clock()):
-                rec = score_record(cache[key], q)
-            else:
-                res = _normalize_result(answer_fn(q["question"]), idk)
-                retrieved = res["retrieved"]
-                retrieved_pages = sorted({
-                    r.get("metadata", {}).get("page") for r in retrieved
-                    if r.get("metadata", {}).get("page") is not None
-                })
-                rec = {
-                    "id": q["id"], "category": category, "question": q["question"],
-                    "answer": res["answer"], "pages": res["pages"],
-                    "retrieved_pages": retrieved_pages,
-                    "n_retrieved": len(retrieved),
-                    # closest chunk BEFORE thresholding (calibration signal)
-                    "nearest_distance": res.get("nearest_distance"),
-                    # closest chunk that PASSED the threshold (legacy field)
-                    "top_distance": min(
-                        (r["score"] for r in retrieved if r.get("score") is not None),
-                        default=None,
-                    ),
-                    "abstained": bool(res["abstained"]),
-                    "citations_verified": res.get("citations_verified"),
-                    "index": index_label, "model": rp.GEN_MODEL,
-                    "model_resolved": res.get("model_resolved"),
-                    "evaluated_at": clock(),
-                }
-                score_record(rec, q)
-                cache[key] = rec
-                if save_cache:
-                    save_cache(cache)  # incremental: a crash never loses progress
-                if sleep_between:
-                    time.sleep(sleep_between)
-            records.append(rec)
-            dist = rec.get("nearest_distance")
-            dist_s = "n/a" if dist is None else f"{dist:.3f}"
-            if category == "in_scope":
-                log(f"IN  {rec['id']}: nearest={dist_s} retrieved={rec['n_retrieved']} "
-                    f"abstained={rec['abstained']} keyword_pass={rec.get('keyword_pass')} "
-                    f"page_hit={rec.get('citation_page_hit')}")
-            else:
-                stopped_by = ("" if not rec["abstained"] else
-                              " (threshold)" if rec["n_retrieved"] == 0 else " (model refused)")
-                log(f"OUT {rec['id']}: nearest={dist_s} retrieved={rec['n_retrieved']} "
-                    f"abstained={rec['abstained']}{stopped_by}")
+    for q in es.items_of(qset):
+        key = _cache_key(q, index_label)
+        if key in cache and _is_fresh(cache[key], max_age_s, clock()):
+            rec = cache[key]
+        else:
+            res = _normalize_result(answer_fn(q["question"]), idk)
+            rec = _record_from_result(q, res, index_label, clock())
+            cache[key] = rec
+            if save_cache:
+                save_cache(cache)  # incremental: a crash never loses progress
+            if sleep_between:
+                time.sleep(sleep_between)
+        score_record(rec, q, chunk_texts)
+        records.append(rec)
+        log(_log_line(rec))
 
-    return records, summarize(records)
+    return records, summarize(records, category_order=list(qset.get("categories") or []))
 
 
 def suggest_threshold(records: list[dict]) -> dict:
     """From nearest (pre-threshold) distances, report the separation between
-    in-scope and out-of-scope questions and a midpoint threshold if they are
-    separable. Distances: lower = more similar."""
+    questions that should be answered (answer/defer) and those that should
+    abstain, and a midpoint threshold if they are separable.
+    Distances: lower = more similar."""
     ins = [r["nearest_distance"] for r in records
-           if r["category"] == "in_scope" and r.get("nearest_distance") is not None]
+           if r["behavior"] in em.SHOULD_ANSWER and r.get("nearest_distance") is not None]
     outs = [r["nearest_distance"] for r in records
-            if r["category"] == "out_of_scope" and r.get("nearest_distance") is not None]
+            if r["behavior"] == "abstain" and r.get("nearest_distance") is not None]
     if not ins or not outs:
         return {"in_scope_max": max(ins, default=None),
                 "out_of_scope_min": min(outs, default=None),
@@ -230,15 +248,20 @@ def suggest_threshold(records: list[dict]) -> dict:
     }
 
 
-def summarize(records: list[dict]) -> dict:
-    ins = [r for r in records if r["category"] == "in_scope"]
-    outs = [r for r in records if r["category"] == "out_of_scope"]
+def summarize(records: list[dict], category_order: list[str] | None = None) -> dict:
+    """All metrics. The flat in_scope_* / out_of_scope_* keys are the v1
+    summary (in-scope = answer + defer items, out-of-scope = abstain items),
+    kept so v1 numbers stay comparable with earlier runs; the v2 metrics are
+    under overall / abstention / by_behavior / by_category / failures."""
+    ins = [r for r in records if r["behavior"] in em.SHOULD_ANSWER]
+    outs = [r for r in records if r["behavior"] == "abstain"]
     calibrated = [r for r in ins if r.get("keyword_pass") is not None]
     paged_retr = [r for r in ins if r.get("retrieval_page_hit") is not None]
     paged_cite = [r for r in ins if r.get("citation_page_hit") is not None]
-    rate = lambda n, d: (n / d) if d else None  # noqa: E731
+    rate = em.rate
     models = sorted({r.get("model_resolved") for r in records if r.get("model_resolved")})
-    return {
+    summary = {
+        "n_items": len(records),
         "n_in_scope": len(ins),
         "n_out_of_scope": len(outs),
         "out_of_scope_abstention_rate": rate(sum(r["abstained"] for r in outs), len(outs)),
@@ -264,11 +287,14 @@ def summarize(records: list[dict]) -> dict:
         "distance_margin": suggest_threshold(records),
         "models_resolved": models,
     }
+    summary.update(em.summarize_items(records, category_order))
+    return summary
 
 
 def format_summary(s: dict, index_label: str) -> str:
-    pct = lambda x: "n/a" if x is None else f"{x:.0%}"  # noqa: E731
-    num = lambda x: "n/a" if x is None else f"{x:.3f}"  # noqa: E731
+    """Short console summary; the full breakdown is in the markdown report."""
+    pct = er.pct
+    num = er.num
     m = s["distance_margin"]
     resolved_list = s.get("models_resolved") or []
     if not resolved_list:
@@ -277,13 +303,23 @@ def format_summary(s: dict, index_label: str) -> str:
         resolved = "exact version not reported by the API"
     else:
         resolved = ", ".join(resolved_list)
+    o = s.get("overall") or {}
+    a = s.get("abstention") or {}
     lines = [
         f"=== Evaluation summary (index: {index_label}, model: {rp.GEN_MODEL} -> {resolved}) ===",
+        f"Items passed                 : {o.get('n_pass', 'n/a')}/{s['n_items']}  "
+        f"({pct(o.get('pass_rate'))})",
+        f"Abstention precision / recall: {pct(a.get('precision'))} / {pct(a.get('recall'))}  "
+        f"(should-abstain items: {s['n_out_of_scope']}; target 100% / 100%)",
         f"Out-of-scope abstention rate : {pct(s['out_of_scope_abstention_rate'])}  (target 100%)",
-        f"In-scope retrieval hit rate  : {pct(s['in_scope_retrieval_hit_rate'])}  (target ~100%)",
-        f"In-scope retrieval page rate : {pct(s['in_scope_retrieval_page_rate'])}",
-        f"In-scope citation page rate  : {pct(s['in_scope_citation_page_rate'])}",
         f"In-scope answered            : {s['in_scope_answered']}/{s['n_in_scope']}",
+        f"In-scope retrieval hit rate  : {pct(s['in_scope_retrieval_hit_rate'])}  (target ~100%)",
+        f"Recall@k (after / before threshold): {pct(o.get('recall_at_k'))} / "
+        f"{pct(o.get('recall_at_k_pre_threshold'))}",
+        f"Cited page hit / precision   : {pct(o.get('cited_page_hit'))} / "
+        f"{pct(o.get('cited_page_precision'))}  (of answered)",
+        f"Citation evidence hit        : {pct(o.get('evidence_hit'))}  (of answered; "
+        f"coverage {pct(o.get('evidence_coverage'))})",
         f"In-scope answer-keyword rate : {pct(s['in_scope_keyword_rate'])}",
         f"Nearest distance, in-scope max / out-of-scope min : "
         f"{num(m['in_scope_max'])} / {num(m['out_of_scope_min'])}  "
@@ -313,7 +349,22 @@ def format_summary(s: dict, index_label: str) -> str:
                        ("out_of_scope_answered_ids", "Out-of-scope questions that were answered")):
         if s.get(key):
             lines.append(f"{label}: {s[key]}")
+    failures = s.get("failures") or []
+    if failures:
+        lines.append(f"Failed items ({len(failures)}): " + ", ".join(f["id"] for f in failures))
     return "\n".join(lines)
+
+
+def _git_commit() -> str | None:
+    """Short commit of the code that ran, with a marker if src/ has local edits."""
+    try:
+        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT,
+                             capture_output=True, text=True, check=True).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--", "src"], cwd=REPO_ROOT,
+                               capture_output=True, text=True, check=True).stdout.strip()
+        return sha + (" (with uncommitted changes in src/)" if dirty else "")
+    except Exception:
+        return None
 
 
 # --- CLI ---------------------------------------------------------------------
@@ -325,13 +376,30 @@ def main(argv: list[str] | None = None) -> int:
     src.add_argument("--pdf", default=None,
                      help="evaluate a policy PDF instead: builds an in-memory index "
                           "(costs one embedding pass) - use with your own --questions")
-    ap.add_argument("--questions", default=str(DEFAULT_QUESTIONS))
-    ap.add_argument("--results", default=str(DEFAULT_RESULTS))
+    ap.add_argument("--questions", default=str(DEFAULT_QUESTIONS),
+                    help="eval set, v2 or v1 format (default: eval/questions_v2.json)")
+    ap.add_argument("--results", default=None,
+                    help="answer cache (default: <questions>_results.json next to the set; "
+                         "notebooks/eval/eval_results.json for v1)")
+    ap.add_argument("--report", default=None,
+                    help="markdown report path; a metrics .json is written next to it "
+                         "(default: eval/reports/<set version>_<date>.md; for --pdf, next "
+                         "to the results file)")
+    ap.add_argument("--no-report", action="store_true", help="only print the summary")
     ap.add_argument("--no-cache", action="store_true", help="ignore cached results")
     ap.add_argument("--max-age-days", type=float, default=DEFAULT_MAX_AGE_DAYS,
                     help="re-run cached results older than this (0 = never expire)")
     ap.add_argument("--sleep", type=float, default=2.0, help="seconds between API calls")
     args = ap.parse_args(argv)
+
+    questions_path = Path(args.questions)
+    qset = es.load_eval_set(questions_path)
+    if not es.is_v1(qset):
+        problems = es.validate_eval_set(qset)
+        if problems:
+            print("error: the eval set is invalid (fix it, then run python -m src.eval_set):\n  "
+                  + "\n  ".join(problems), file=sys.stderr)
+            return 2
 
     try:
         rp._read_api_key()  # fail fast, before opening anything
@@ -344,7 +412,6 @@ def main(argv: list[str] | None = None) -> int:
               f"version served it, so cached results expire after {args.max_age_days:g} "
               "days. Pin INSURANCE_RAG_GEN_MODEL to a specific version for reproducible runs.")
 
-    qset = json.loads(Path(args.questions).read_text(encoding="utf-8"))
     if args.pdf:
         pdf = Path(args.pdf).resolve()
         collection, _ = rp.build_index_from_pdf(str(pdf), persist_dir=None,
@@ -357,9 +424,15 @@ def main(argv: list[str] | None = None) -> int:
             index_label = str(Path(args.index).resolve().relative_to(REPO_ROOT))
         except ValueError:
             index_label = str(Path(args.index).resolve())
-    print(f"Index: {index_label} ({collection.count()} chunks)")
+    n_chunks = collection.count()
+    print(f"Index: {index_label} ({n_chunks} chunks)")
+    print(f"Eval set: {questions_path} ({es.set_version(qset)}, "
+          f"{len(es.items_of(qset))} items)")
+    # Chunk text, for checking cited passages against evidence phrases. Held in
+    # memory for scoring only; never written to the cache or the report.
+    chunk_texts = {c["id"]: c["text"] for c in es.chunks_from_collection(collection)}
 
-    results_path = Path(args.results)
+    results_path = Path(args.results) if args.results else results_path_for(questions_path)
     cache = {}
     if not args.no_cache and results_path.exists():
         cache = json.loads(results_path.read_text(encoding="utf-8"))
@@ -368,7 +441,7 @@ def main(argv: list[str] | None = None) -> int:
         results_path.parent.mkdir(parents=True, exist_ok=True)
         results_path.write_text(json.dumps(c, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    _records, summary = run_eval(
+    records, summary = run_eval(
         qset,
         answer_fn=lambda q: rp.answer_question_detailed(collection, q),
         index_label=index_label,
@@ -376,9 +449,41 @@ def main(argv: list[str] | None = None) -> int:
         save_cache=_save,
         sleep_between=args.sleep,
         max_age_days=args.max_age_days or None,
+        chunk_texts=chunk_texts,
     )
     print()
     print(format_summary(summary, index_label))
+
+    if not args.no_report:
+        today = _dt.date.today().isoformat()
+        version = es.set_version(qset)
+        if args.report:
+            report_path = Path(args.report)
+        elif args.pdf:
+            report_path = results_path.with_name(results_path.stem + f"_report_{today}.md")
+        else:
+            report_path = REPORTS_DIR / f"{version}_{today}.md"
+        meta = {
+            "date": today,
+            "eval_set": str(questions_path),
+            "eval_set_version": version,
+            "n_items": len(records),
+            "index": index_label,
+            "n_chunks": n_chunks,
+            "gen_model": rp.GEN_MODEL,
+            "models_resolved": summary.get("models_resolved") or [],
+            "embed_model": rp.EMBED_MODEL,
+            "k": rp.K_DEFAULT,
+            "threshold": rp.DISTANCE_THRESHOLD,
+            "chunk_size": rp.CHUNK_SIZE,
+            "chunk_overlap": rp.CHUNK_OVERLAP,
+            "encoding": rp.ENCODING_NAME,
+            "git_commit": _git_commit(),
+        }
+        md_path, json_path = er.write_report(report_path, summary, records, meta)
+        print(f"\nReport: {md_path}\nMetrics: {json_path}")
+        if args.pdf:
+            print("note: this report quotes answers about your PDF; keep it out of the repo.")
     return 0
 
 

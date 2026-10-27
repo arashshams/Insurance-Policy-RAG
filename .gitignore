@@ -36,5 +36,6 @@ Thumbs.db
 # --- Stray R artifacts (not part of this project) ---
 .Rhistory
 
-# --- Local evaluation cache (results are summarized in README) ---
+# --- Local evaluation caches (raw answers; reports in eval/reports/ are committed) ---
 notebooks/eval/eval_results.json
+eval/*_results.json
