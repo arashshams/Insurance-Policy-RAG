@@ -58,8 +58,12 @@ GEMINI_BASE_URL = os.environ.get(
 K_DEFAULT = int(os.environ.get("INSURANCE_RAG_K", "4"))
 
 # Chunks whose distance exceeds this are treated as irrelevant (abstain).
-# Calibrated 2026-07-27 against the eval set (37-chunk index): in-scope
-# distances ~0.25-0.34, out-of-scope ~0.40-0.50; 0.37 cleanly separates them.
+# First calibrated 2026-07-27 on the original 8 + 4 questions, where 0.37
+# separated in-scope (~0.25-0.34) from out-of-scope (~0.40-0.50). The larger
+# question sets since then OVERLAP (near-miss out-of-scope questions come as
+# close as 0.335; real ones reach 0.344), so no threshold alone separates them.
+# 0.37 is kept (PLAN.md decision D1): it keeps every real question, and the
+# model's refusal ("I don't know" from the prompt) stops the near-misses.
 # IMPORTANT: this value is calibrated on the bundled SAMPLE policy only. It is
 # not known to transfer to other documents; re-calibrate with
 # `python -m src.evaluate --pdf your_policy.pdf --questions your_questions.json`
@@ -589,6 +593,10 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
                                    falls back to every retrieved chunk's page
       nearest_distance    distance of the closest chunk BEFORE thresholding
                           (how close an abstained question came; for calibration)
+      candidates          all k nearest chunks BEFORE thresholding, as
+                          {"id", "page", "distance"} (no text). Lets the
+                          evaluation measure recall before/after the threshold
+                          and re-score other thresholds without new API calls.
       threshold           the threshold that was applied
       model_requested     model name sent to the API (may be an alias)
       model_resolved      model name the API reported back, if any (Gemini's
@@ -609,6 +617,10 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
         "cited_ids": [],
         "citations_verified": False,
         "nearest_distance": min(distances) if distances else None,
+        "candidates": [
+            {"id": h["id"], "page": h["metadata"].get("page"), "distance": h["score"]}
+            for h in all_hits
+        ],
         "threshold": threshold,
         "model_requested": model_name,
         "model_resolved": None,

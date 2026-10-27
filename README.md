@@ -77,7 +77,7 @@ The module exposes these functions, which the notebooks, the evaluation harness,
 - `build_index_from_pdf(source, persist_dir=None, ...)` -> `(collection, chunks)`. `source` is a path or uploaded bytes; `persist_dir=None` builds an in-memory index.
 - `retrieve_top_k(collection, query, k=K_DEFAULT, threshold=DISTANCE_THRESHOLD)` -> a list of `{id, text, metadata, score}` for the passages that clear the threshold.
 - `answer_question(collection, question, k=K_DEFAULT, model_name=GEN_MODEL, threshold=DISTANCE_THRESHOLD)` -> `(answer_text, pages, retrieved)`, returning `("I don't know", [], [])` when retrieval comes back empty. `pages` are the pages of the passages the model cited, and `[]` whenever the system abstains.
-- `answer_question_detailed(...)` (same arguments) -> a dict with the above plus `abstained`, `cited_ids`, `citations_verified` (False when the model cited nothing and `pages` falls back to every retrieved passage), `nearest_distance` (closest passage *before* the threshold), and `model_resolved` (the model name the API reported; Gemini's endpoint currently echoes the requested name, so this pins down a version only if you request one).
+- `answer_question_detailed(...)` (same arguments) -> a dict with the above plus `abstained`, `cited_ids`, `citations_verified` (False when the model cited nothing and `pages` falls back to every retrieved passage), `nearest_distance` (closest passage *before* the threshold), `candidates` (id, page and distance of every top-k passage before the threshold, no text), and `model_resolved` (the model name the API reported; Gemini's endpoint currently echoes the requested name, so this pins down a version only if you request one).
 - `is_abstention(answer)` -> the single definition of "the system said I don't know", used by the app, the API and the evaluation.
 
 ## Repository layout
@@ -102,11 +102,14 @@ notebooks/
 src/
   rag_pipeline.py                   # the shared, importable pipeline
   evaluate.py                       # evaluation harness (CLI: python -m src.evaluate)
+  eval_metrics.py                   # judge-free metrics (abstention, retrieval, citations)
+  eval_report.py                    # markdown report + metrics JSON per run
   eval_set.py                       # validates eval sets, renders review tables
   guardrails.py                     # rate limiting + idle-upload cleanup
 eval/
   questions_v2.json                 # eval set v2: 65 items, categories, pages, reference answers
   questions_v2_review.md            # generated review table for eval set v2
+  reports/                          # one report per evaluation run (<set version>_<date>.md/.json)
 tests/                              # offline tests (no API key needed)
 .github/workflows/tests.yml         # CI: lint + offline tests
 .streamlit/config.toml              # Streamlit server settings (upload size cap)
@@ -157,12 +160,16 @@ Calibration and the numbers below were produced against a published, SAMPLE-wate
 
 ## Evaluation (the quality story)
 
-The pipeline is validated end-to-end on the free tier using an evaluation harness (`src/evaluate.py`, with `04_evaluation.ipynb` as a notebook runner). All metrics are deterministic (no LLM judge):
+The pipeline is validated end-to-end on the free tier using an evaluation harness (`src/evaluate.py`, with `04_evaluation.ipynb` as a notebook runner). It runs **eval set v2** (`eval/questions_v2.json`): 65 questions in 9 categories, each with an expected behaviour: *answer* it from the policy, *defer* (say the amount is in the Schedule of Benefits, which isn't part of the policy), or *abstain* ("I don't know"). Answerable items carry the pages that may hold the answer and short evidence phrases quoted from the policy. All metrics are deterministic (no LLM judge yet):
 
-- **Guardrail:** out-of-scope abstention rate, judged with the same `is_abstention` rule the app and API use, and whether each abstention came from the distance threshold or the model's refusal.
-- **Retrieval:** in-scope hit rate (anything passed the threshold) and page rate (a passage from the question's `expected_pages` was retrieved).
-- **Answers:** citation page rate (the answer cited a passage on an expected page) and keyword rate (all expected keywords appear).
-- **Headroom:** each question's closest-passage distance *before* the threshold, the gap between the worst in-scope and best out-of-scope question, and a suggested threshold.
+- **Guardrail:** abstention precision and recall ("should abstain" is the positive class), judged with the same `is_abstention` rule the app and API use, and whether each abstention came from the distance threshold or the model's refusal.
+- **Retrieval:** hit rate (anything passed the threshold), page hit@k (a passage on an expected page was retrieved) and recall@k (share of the item's evidence phrases inside the retrieved passages, before and after the threshold).
+- **Citations:** whether the answer cited a passage on an expected page, and the stricter check: whether a passage it cited actually contains the evidence phrase. Keyword rate (all expected keywords appear) is kept from v1.
+- **Headroom:** each question's closest-passage distance *before* the threshold, per expected behaviour, and whether a threshold alone could separate answerable from out-of-scope questions.
+
+An item passes when it shows the right behaviour and, if it should be answered, cites a passage containing its evidence. Each run prints a summary and writes a report with per-behaviour and per-category tables and every failure with its reason: `eval/reports/<set version>_<date>.md`, plus the metrics as JSON. The metric definitions are in `src/eval_metrics.py`.
+
+The results below are from eval set v1 (18 questions); v2 results will replace them once a committed v2 report exists.
 
 Cached results expire after 14 days (`--max-age-days`), because the default model name is a moving alias and Gemini's OpenAI-compatible endpoint doesn't report which version served a request. Scoring is re-applied to cached answers on every run, so editing a question's expected keywords or pages doesn't need new API calls.
 
@@ -192,20 +199,23 @@ The harness evaluates the exact code and index the live app ships. To reproduce 
 
 ```bash
 export GEMINI_API_KEY=...
-python -m src.evaluate            # defaults to app/demo_index/; cached in notebooks/eval/eval_results.json
+make eval        # python -m src.evaluate: eval set v2 on app/demo_index/, writes eval/reports/
+make eval-v1     # python -m src.evaluate --questions notebooks/eval/eval_questions.json
 ```
+
+Answers are cached (`eval/questions_v2_results.json`; `notebooks/eval/eval_results.json` for v1; both git-ignored), so a re-run only re-scores. A full v2 run costs 65 embedding calls and at most 65 generation calls (questions stopped by the threshold skip generation); with the default 2-second pacing it takes roughly 5–8 minutes on the free tier.
 
 Evaluation runs are sequential and paced to stay within free-tier limits, and no real policy facts are committed.
 
 ### Calibrating your own policy
 
-The threshold only means something for the document it was calibrated on. For another policy, write a small question set in the same JSON format (in-scope questions with `expected_keywords` and `expected_pages`, plus out-of-scope ones, ideally including near-misses), then run:
+The threshold only means something for the document it was calibrated on. For another policy, write a small question set in either format (the v1 format, in-scope questions with `expected_keywords` and `expected_pages` plus out-of-scope ones, is the quickest; include near-misses), then run:
 
 ```bash
 python -m src.evaluate --pdf my_policy.pdf --questions my_questions.json --results my_results.json
 ```
 
-This builds an in-memory index of the PDF (one embedding pass), runs the questions, and prints the in-scope/out-of-scope distance gap with a suggested threshold. Apply it with `INSURANCE_RAG_UPLOAD_THRESHOLD` (app upload mode) or `INSURANCE_RAG_THRESHOLD` (everywhere). Keep private policies and their results out of the repo.
+This builds an in-memory index of the PDF (one embedding pass), runs the questions, and prints the in-scope/out-of-scope distance gap with a suggested threshold. Its report is written next to the results file, not into `eval/reports/`, because it quotes answers about your document. Apply it with `INSURANCE_RAG_UPLOAD_THRESHOLD` (app upload mode) or `INSURANCE_RAG_THRESHOLD` (everywhere). Keep private policies and their results out of the repo.
 
 ## Responsible AI
 

@@ -9,20 +9,20 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-10-26 (M1a merged; paused before M1b, see "Where we are")
+Last updated: 2026-10-27 (M1b implemented on branch `m1b-eval-v2-metrics`; see "Where we are")
 
 ---
 
 ## Where we are (read this first when resuming)
 
-- **Status (2026-10-26):** M0 (PR #21) and M1a (PR #22, eval set v2) are
-  merged. The owner paused the work here.
-- **Next step: M1b.** Propose the plan first and wait for approval. Scope:
-  the harness runs eval set v2 (`eval/questions_v2.json`) and reports
-  abstention precision/recall (by `behavior`, including `defer`), retrieval
-  hit rate and recall@k against `expected_pages`, citation accuracy checked
-  against the `evidence` phrases, and a per-category markdown report.
-  Keep v1 runnable until v2 replaces it in the README.
+- **Status (2026-10-27):** M0 (PR #21) and M1a (PR #22, eval set v2) are
+  merged. M1b (judge-free metrics + report on eval set v2) is implemented on
+  branch `m1b-eval-v2-metrics`, plan approved by the owner.
+- **Owner to do for M1b:** `make test lint` (the agent session could not run
+  the test suite), open the PR, then run `make eval` once and
+  `make restore-index`. The first v2 report lands in `eval/reports/`; it is
+  committed with the failure analysis in M1d.
+- **Next step after that: M1c** (LLM-as-judge). Propose the plan first.
 - **Owner runs anything that calls Gemini** (no key in agent sessions);
   design each step as one command (`make eval ...`).
 - **Push access:** the agent session used so far could not push to the repo
@@ -131,7 +131,9 @@ with exponential backoff (`_call_with_backoff`); when retries run out,
 | Path | What it is |
 | --- | --- |
 | `src/rag_pipeline.py` | The shared pipeline (config, embedding, index build, retrieval, generation, `is_abstention`, citations). |
-| `src/evaluate.py` | Evaluation harness, CLI `python -m src.evaluate` (`--index`, `--pdf`, `--questions`, `--results`, `--no-cache`, `--max-age-days`, `--sleep`). |
+| `src/evaluate.py` | Evaluation harness, CLI `python -m src.evaluate` (`--index`, `--pdf`, `--questions`, `--results`, `--report`, `--no-report`, `--no-cache`, `--max-age-days`, `--sleep`). Runs eval set v2 by default; v1 via `make eval-v1`. |
+| `src/eval_metrics.py` | Judge-free metrics: per-item scoring by `behavior`, abstention precision/recall, retrieval, citation/evidence checks, per-behaviour/category aggregation. |
+| `src/eval_report.py` | Markdown report + metrics JSON per run (`eval/reports/<set version>_<date>.md/.json`). |
 | `src/guardrails.py` | `RateLimiter` (sliding window) and `UploadIndexRegistry` (idle TTL + cap for in-memory upload indexes). |
 | `app/streamlit_app.py` | Streamlit UI: bundled-policy demo + per-session upload mode. Calls the API over HTTP for the demo when `INSURANCE_RAG_API_URL` is set. |
 | `app/demo_index/` | Committed, pre-built Chroma index of the SAMPLE policy (38 chunks). |
@@ -139,7 +141,7 @@ with exponential backoff (`_call_with_backoff`); when retries run out,
 | `notebooks/01`–`02` | Ingestion / indexing walkthroughs (still contain their own code; see backlog). |
 | `notebooks/03_insurance_policy_rag.ipynb` | End-to-end walkthrough; imports the shared module. |
 | `notebooks/04_evaluation.ipynb` | Notebook runner for `src/evaluate.py`. |
-| `notebooks/eval/eval_questions.json` | Eval set v1: 12 in-scope + 6 out-of-scope. Each in-scope item has `expected_keywords` and `expected_pages`. Still what the harness runs until M1b. |
+| `notebooks/eval/eval_questions.json` | Eval set v1: 12 in-scope + 6 out-of-scope. Each in-scope item has `expected_keywords` and `expected_pages`. Still runnable (`make eval-v1`); the app's example questions must come from it. |
 | `eval/questions_v2.json`, `eval/questions_v2_review.md` | Eval set v2 (65 items, see M1a) and its generated review table. |
 | `src/eval_set.py` | Load/validate eval sets, check evidence against an index, render review tables. |
 | `tests/` | 42 offline tests (pipeline, guardrails, eval harness, API). |
@@ -153,7 +155,7 @@ with exponential backoff (`_call_with_backoff`); when retries run out,
 - `load_persistent_collection(persist_dir, collection_name)`, `drop_collection(collection)`
 - `retrieve_top_k(collection, query, k, threshold) -> [ {id, text, metadata, score} ]`
 - `answer_question(collection, question, k, model_name, threshold) -> (answer, pages, retrieved)`
-- `answer_question_detailed(...) -> dict` with `answer, pages, retrieved, abstained, cited_ids, citations_verified, nearest_distance, threshold, model_requested, model_resolved, finish_reason`
+- `answer_question_detailed(...) -> dict` with `answer, pages, retrieved, abstained, cited_ids, citations_verified, nearest_distance, candidates, threshold, model_requested, model_resolved, finish_reason` (`candidates`: id, page and distance of all top-k chunks before the threshold; no text)
 - `is_abstention(answer)`, `extract_citations(answer, valid_ids)`
 - Errors: `DocumentTooLargeError`, `GeminiUnavailableError`
 
@@ -196,6 +198,9 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | D6 | Threshold/k sweeps reuse cached query embeddings and passage distances; only configurations that change what is retrieved need new generation calls. | Stay inside free-tier limits. | Proposed (part of M3 plan) |
 | D7 | Lint with **ruff** (pinned in `requirements-dev.txt`), config in `ruff.toml`; notebooks excluded from lint. | Fast, one tool; notebooks contain Colab shell/magic lines. | Done in M0 |
 | D8 | Questions whose answer the policy defers to the Schedule of Benefits (not in the document) have behaviour **`defer`**: the correct answer says the amount is in the Schedule of Benefits and cites that passage; "I don't know" counts as wrong. | More helpful than abstaining, and it's a real case (v1's original `in_02`). | Decided (owner, 2026-10-26) |
+| D10 | **Recall@k is measured on evidence phrases**, not on `expected_pages`: the share of an item's evidence phrases inside the retrieved chunks (after and before the threshold). Page hit@k uses `expected_pages`. | `expected_pages` lists acceptable pages (any one may hold the answer), so recall against all of them would penalize correct retrievals; every evidence phrase is text the answer needs. | Done in M1b |
+| D11 | **Item pass** = correct behaviour + (for answer/defer) a cited chunk contains an evidence phrase. A correct `defer` is an answer that mentions "Schedule of Benefits" and cites the deferring passage. Citation metrics count only answered items; a citation-less answer (pipeline's page fallback) counts as no citation. | Judge-free proxy for "grounded and on target"; content correctness is M1c's job. | Done in M1b (owner approved) |
+| D12 | `make eval` runs **v2** by default; v1 stays runnable (`make eval-v1`, own cache). Each set has its own git-ignored answer cache (`eval/questions_v2_results.json`). Reports for `--pdf` runs go next to the results file, never into `eval/reports/`. | v2 is the new ground truth; separate caches never mix; private-policy answers stay out of the repo (rule 2). | Done in M1b (owner approved) |
 | D9 | The eval set is validated like code (`src/eval_set.py` + `tests/test_eval_set.py`): schema, every evidence phrase present on its stated page of the demo index, review table in sync, all v1 questions carried over unchanged. | Ground truth for every quality claim; catches typos and wrong pages before they become wrong metrics. | Done in M1a |
 
 ## 6. Milestones
@@ -233,7 +238,7 @@ point to `master`; `requirements.txt` pinned.
 Acceptance: `make setup test lint` works on Linux/macOS and in CI; README
 "Getting started" mentions the Makefile and the plain commands.
 
-### M1. Evaluation 2.0 (highest priority) — `[~]` (M1a done; M1b–M1d next)
+### M1. Evaluation 2.0 (highest priority) — `[~]` (M1a done; M1b on branch; M1c–M1d next)
 
 **M1a — eval set v2 (data only).** `[x]` merged as PR #22.
 - [x] `eval/questions_v2.json`: 65 items (42 answer, 5 defer, 18 abstain).
@@ -263,11 +268,28 @@ compared; the evidence phrases are what "cited pages contain the answer"
 should be checked against; `adversarial` items must be scored by their
 `behavior`, not by category.
 
-**M1b — judge-free metrics + report.**
-- Abstention precision/recall (positive class = "should abstain").
-- Retrieval hit rate and recall@k vs `expected_pages`.
-- Citation accuracy (cited pages are among `expected_pages`).
-- Per-category breakdown; `make eval` writes a markdown report.
+**M1b — judge-free metrics + report.** `[~]` implemented on branch
+`m1b-eval-v2-metrics`; waiting for the owner's test run, PR and first eval run.
+- [x] One scoring path: `eval_set.items_of()` turns v1 into v2-shaped items
+  (`in_scope` -> answer, `out_of_scope` -> abstain); items are scored by
+  `behavior`, never by category.
+- [x] Abstention precision/recall (positive class = "should abstain"), with
+  threshold vs model split.
+- [x] Retrieval hit rate, page hit@k (`expected_pages`) and recall@k of the
+  evidence phrases, after and before the threshold (D10).
+- [x] Citation accuracy: cited page hit/precision vs `expected_pages`, and
+  evidence hit/coverage (a cited chunk contains an evidence phrase). Chunk
+  text is looked up from the index at scoring time, never cached.
+- [x] Item pass/fail with reasons (D11); per-behaviour and per-category
+  tables; distance margin per behaviour.
+- [x] `make eval` runs v2 (D12) and writes `eval/reports/<version>_<date>.md`
+  + metrics `.json`; `make eval-v1` runs v1.
+- [x] Pipeline: `answer_question_detailed()` returns `candidates` (top-k
+  before the threshold, no text) — also sets up the M3 sweeps (D6).
+- [x] Validator: every evidence phrase lies inside one chunk
+  (`check_evidence_in_chunks`, tested on the demo index; all 53 do).
+- [x] Offline tests (17 new), README, notebook 04, `make help`.
+- [ ] Owner: `make test lint`, merge, run `make eval`.
 
 **M1c — LLM-as-judge.**
 - Faithfulness (answer supported by retrieved text) and correctness (vs
@@ -398,3 +420,13 @@ sections. 2–3 resume bullets, describing only what was built.
   tests (54 total). Merged by the owner; no corrections requested.
 - **2026-10-26 — paused.** Owner taking a break; `PLAN.md` progress
   committed directly to `master`. **Next: M1b** (propose the plan first).
+- **2026-10-27 — branch `m1b-eval-v2-metrics`.** Owner approved the M1b
+  plan (v2 as default, the `defer` pass rule, `candidates` in the pipeline).
+  Added `src/eval_metrics.py`, `src/eval_report.py`, v1 adapter and
+  evidence-in-chunk check in `src/eval_set.py`, `candidates` in the pipeline,
+  harness on v2 with reports, `make eval-v1`, 17 offline tests; README and
+  notebook 04 updated; fixed the stale test-file reference in
+  `questions_v2.json` and the stale "0.37 cleanly separates" comment.
+  Decisions D10–D12. The agent could not run pytest in its session (lint
+  passed); owner to run `make test`. Push still unavailable: delivered as a
+  `git am` mailbox. **Next: owner runs `make eval`; then M1c.**

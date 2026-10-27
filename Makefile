@@ -9,14 +9,15 @@
 PYTHON ?= python
 
 .DEFAULT_GOAL := help
-.PHONY: help setup test lint eval eval-set run-app run-api restore-index clean
+.PHONY: help setup test lint eval eval-v1 eval-set run-app run-api restore-index clean
 
 help: ## Show targets and the command each one runs
 	@echo "Targets (plain command in brackets):"
 	@echo "  setup          install runtime + dev dependencies  [pip install -r requirements.txt -r requirements-dev.txt]"
 	@echo "  test           offline tests, no API key needed    [python -m pytest -q tests/]"
 	@echo "  lint           lint the code                       [python -m ruff check .]"
-	@echo "  eval           evaluation harness (GEMINI_API_KEY)  [python -m src.evaluate]"
+	@echo "  eval           eval set v2 + report (GEMINI_API_KEY) [python -m src.evaluate]"
+	@echo "  eval-v1        the older v1 eval set (GEMINI_API_KEY) [python -m src.evaluate --questions notebooks/eval/eval_questions.json]"
 	@echo "  eval-set       validate eval set, rebuild review    [python -m src.eval_set]"
 	@echo "  run-app        Streamlit app on :8501               [python -m streamlit run app/streamlit_app.py]"
 	@echo "  run-api        FastAPI backend on :8000             [python -m uvicorn api.main:app --reload]"
@@ -32,9 +33,13 @@ test:
 lint:
 	$(PYTHON) -m ruff check .
 
+# Runs eval set v2 and writes eval/reports/<version>_<date>.md + .json.
 # Extra flags pass through, e.g.: make eval ARGS="--no-cache"
 eval:
 	$(PYTHON) -m src.evaluate $(ARGS)
+
+eval-v1:
+	$(PYTHON) -m src.evaluate --questions notebooks/eval/eval_questions.json $(ARGS)
 
 # Validate eval/questions_v2.json and regenerate eval/questions_v2_review.md.
 eval-set:

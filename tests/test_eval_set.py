@@ -42,6 +42,28 @@ def test_v2_evidence_is_on_stated_pages_of_demo_index(v2, tmp_path_factory):
     assert es.check_evidence(v2, pages) == []
 
 
+def test_v2_evidence_fits_inside_single_chunks(v2, tmp_path_factory):
+    # The harness looks for evidence phrases in the chunks an answer cited, so
+    # a phrase split across two chunks could never be matched.
+    pytest.importorskip("chromadb")
+    from src import rag_pipeline as rp
+
+    idx = tmp_path_factory.mktemp("idx_chunks") / "demo_index"
+    shutil.copytree(REPO_ROOT / "app" / "demo_index", idx)
+    chunks = es.chunks_from_collection(rp.load_persistent_collection(persist_dir=str(idx)))
+    assert chunks and es.check_evidence_in_chunks(v2, chunks) == []
+
+
+def test_evidence_in_chunks_check_catches_a_split_phrase():
+    data = {"items": [{"id": "x", "evidence": [{"page": 3, "text": "alpha beta gamma"}]}]}
+    chunks = [{"id": "doc_0", "page": 3, "text": "... alpha beta"},
+              {"id": "doc_1", "page": 3, "text": "beta gamma ..."}]
+    problems = es.check_evidence_in_chunks(data, chunks)
+    assert problems and "not inside a single chunk" in problems[0]
+    assert es.check_evidence_in_chunks(data, [{"id": "d", "page": 3,
+                                               "text": "Alpha, beta gamma."}]) == []
+
+
 def test_v2_review_table_is_up_to_date(v2):
     expected = es.render_review_markdown(v2, es.DEFAULT_SET.name)
     actual = es.review_path_for(es.DEFAULT_SET).read_text(encoding="utf-8")

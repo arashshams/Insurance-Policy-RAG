@@ -8,6 +8,9 @@ claim, so it is checked like code:
                            behaviours, required fields per behaviour.
   * check_evidence()       every evidence phrase appears on its stated page of
                            an index (tests run it against app/demo_index).
+  * check_evidence_in_chunks()  ...and inside a single chunk of that page, so
+                           the harness can find it in a cited chunk.
+  * items_of()             any set (v1 or v2) as v2-shaped items, for the harness.
   * render_review_markdown() a human-readable table for reviewing the set in a
                            PR, committed as eval/questions_v2_review.md.
 
@@ -34,6 +37,35 @@ BEHAVIORS_NEEDING_GROUND_TRUTH = ("answer", "defer")
 # --- loading / validation ----------------------------------------------------
 def load_eval_set(path: str | Path = DEFAULT_SET) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def is_v1(data: dict) -> bool:
+    """v1 sets (notebooks/eval/eval_questions.json) have in_scope/out_of_scope
+    lists instead of a single `items` list."""
+    return "items" not in data and ("in_scope" in data or "out_of_scope" in data)
+
+
+def set_version(data: dict) -> str:
+    """Version label for reports: "v2.0" for eval/questions_v2.json, "v1" for v1."""
+    if is_v1(data):
+        return "v1"
+    v = str(data.get("version") or "unversioned")
+    return v if v.startswith("v") else f"v{v}"
+
+
+def items_of(data: dict) -> list[dict]:
+    """The questions of any eval set as v2-shaped items, so the harness has ONE
+    scoring path. v1 in-scope questions become behavior "answer" and
+    out-of-scope ones "abstain"; their category stays "in_scope" /
+    "out_of_scope". v1 has no reference answers or evidence phrases, so the
+    evidence-based metrics are simply n/a for it."""
+    if not is_v1(data):
+        return list(data.get("items") or [])
+    items = []
+    for category, behavior in (("in_scope", "answer"), ("out_of_scope", "abstain")):
+        for q in data.get(category) or []:
+            items.append({**q, "category": category, "behavior": behavior})
+    return items
 
 
 def validate_eval_set(data: dict) -> list[str]:
@@ -113,6 +145,36 @@ def check_evidence(data: dict, page_texts: dict[int, str]) -> list[str]:
         for p in item.get("expected_pages") or []:
             if p not in page_texts:
                 problems.append(f"{item['id']}: expected page {p} not in the index")
+    return problems
+
+
+def chunks_from_collection(collection) -> list[dict]:
+    """Every chunk of a Chroma collection as {"id", "page", "text"}."""
+    got = collection.get(include=["documents", "metadatas"])
+    return [
+        {"id": _id, "page": (meta or {}).get("page"), "text": doc or ""}
+        for _id, doc, meta in zip(got["ids"], got["documents"], got["metadatas"])
+    ]
+
+
+def check_evidence_in_chunks(data: dict, chunks: list[dict]) -> list[str]:
+    """Problems where an evidence phrase is not inside ONE chunk of its page.
+
+    The harness checks citations by looking for evidence phrases in the text of
+    the chunks an answer cited. A phrase split across two chunks could never be
+    found that way, so it would count every correct citation as a miss. Fix by
+    shortening the phrase to the part inside one chunk."""
+    by_page: dict[int, list[str]] = defaultdict(list)
+    for c in chunks:
+        if c.get("page") is not None:
+            by_page[int(c["page"])].append(normalize_text(c["text"]))
+    problems = []
+    for item in data["items"]:
+        for ev in item.get("evidence") or []:
+            phrase = normalize_text(ev["text"])
+            if not any(phrase in t for t in by_page.get(ev["page"], [])):
+                problems.append(f"{item['id']}: evidence on page {ev['page']} is not inside "
+                                f"a single chunk: {ev['text'][:60]!r}")
     return problems
 
 

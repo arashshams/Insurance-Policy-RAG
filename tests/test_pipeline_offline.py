@@ -242,6 +242,18 @@ def test_nearest_distance_reported_even_when_abstaining(monkeypatch, fake_embedd
     r = rp.answer_question_detailed(_FakeCollection(0.45, 0.52), "Capital of France?")
     assert r["abstained"] and r["retrieved"] == []
     assert r["nearest_distance"] == pytest.approx(0.45)
+    # Every top-k chunk is reported before the threshold, without its text.
+    assert r["candidates"] == [
+        {"id": "doc_0", "page": 7, "distance": pytest.approx(0.45)},
+        {"id": "doc_1", "page": 9, "distance": pytest.approx(0.52)},
+    ]
+
+
+def test_candidates_include_chunks_dropped_by_threshold(monkeypatch, fake_embeddings):
+    monkeypatch.setattr(rp, "get_client", lambda: _fake_client("Covered [doc_0]."))
+    r = rp.answer_question_detailed(_FakeCollection(0.2, 0.5), "Is physio covered?")
+    assert [h["id"] for h in r["retrieved"]] == ["doc_0"]
+    assert [c["id"] for c in r["candidates"]] == ["doc_0", "doc_1"]
 
 
 def test_threshold_is_overridable_per_call(monkeypatch, fake_embeddings):
