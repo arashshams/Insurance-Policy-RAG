@@ -55,6 +55,71 @@ def _group_table(groups: dict, label: str) -> list[str]:
     return rows
 
 
+def _num2(x) -> str:
+    return "n/a" if x is None else f"{x:.2f}"
+
+
+def _judge_section(j: dict) -> list[str]:
+    g = j["overall"]
+    complete = g["n_judged"] == g["n_eligible"]
+    out = [
+        "## LLM judge",
+        "",
+        f"Judge `{j['model']}` with prompt `{j['prompt']}` ({j['prompt_sha']}), scoring "
+        "answered items that showed the right behaviour, on a 0–2 scale: *faithfulness* "
+        "(every claim supported by the retrieved passages) and *correctness* (matches the "
+        "reference answer). Rubric: `eval/prompts/" + j["prompt"] + ".md`.",
+        "",
+    ]
+    if not complete:
+        out += [f"**Not final:** {g['n_judged']} of {g['n_eligible']} eligible answers are "
+                "judged so far (`make judge` continues).", ""]
+    out += [
+        "| Metric | Result |",
+        "|---|---|",
+        f"| Judged | {g['n_judged']} / {g['n_eligible']} |",
+        f"| Fully correct (2) | {pct(g['fully_correct'])} |",
+        f"| Fully faithful (2) | {pct(g['fully_faithful'])} |",
+        f"| Hallucination rate (faithfulness 0) | {pct(g['hallucination_rate'])} |",
+        f"| Mean correctness / faithfulness | {_num2(g['mean_correctness'])} / "
+        f"{_num2(g['mean_faithfulness'])} |",
+        f"| Strict pass (pass + both scores 2), all items | "
+        f"{pct(g['strict_pass_rate']) if g['strict_pass_rate'] is not None else 'n/a until fully judged'} |",
+        "",
+        "| Category | Judged | Fully correct | Fully faithful | Hallucination |",
+        "|---|---|---|---|---|",
+    ]
+    for cat, c in j["by_category"].items():
+        out.append(f"| {cat} | {c['n_judged']}/{c['n_eligible']} | {pct(c['fully_correct'])} "
+                   f"| {pct(c['fully_faithful'])} | {pct(c['hallucination_rate'])} |")
+    a = j.get("agreement")
+    out += ["", "### Judge vs human", ""]
+    if not a:
+        out.append("No human scores yet (`make judge-sheet`, then fill in the CSV).")
+    elif not a.get("dims"):
+        out.append("Human scores exist, but none of their answers are judged yet "
+                   "(or they were given for older answers).")
+    else:
+        out += ["| Score | Items | Exact agreement | Within one | Weighted kappa "
+                "| Judge mean | Human mean |", "|---|---|---|---|---|---|---|"]
+        for dim, d in a["dims"].items():
+            out.append(f"| {dim} | {d['n']} | {pct(d['exact'])} | {pct(d['within_one'])} "
+                       f"| {_num2(d['weighted_kappa'])} | {_num2(d['judge_mean'])} "
+                       f"| {_num2(d['human_mean'])} |")
+    if a and a.get("stale_ids"):
+        out += ["", f"Human scores for an older answer (not counted): {', '.join(a['stale_ids'])}."]
+    out += ["", "### Answers below full marks", ""]
+    if not j["below_full"]:
+        out.append("None." if complete else "None so far.")
+    else:
+        out += ["| ID | Category | Correctness | Faithfulness | Judge's reason "
+                "| Unsupported claims |", "|---|---|---|---|---|---|"]
+        for b in j["below_full"]:
+            out.append(f"| {b['id']} | {b['category']} | {b['correctness']} | {b['faithfulness']} "
+                       f"| {_cell(b['reason'])} | {_cell('; '.join(b['unsupported_claims']))} |")
+    return out + [""]
+
+
 def render_markdown(summary: dict, records: list[dict], meta: dict) -> str:
     o = summary["overall"]
     a = summary["abstention"]
@@ -120,6 +185,7 @@ def render_markdown(summary: dict, records: list[dict], meta: dict) -> str:
         "",
         *_group_table(summary["by_category"], "Category"),
         "",
+        *(_judge_section(summary["judge"]) if summary.get("judge") else []),
         "## Distance margin",
         "",
         "Closest-passage cosine distance *before* the threshold (lower = closer).",
@@ -178,7 +244,7 @@ def render_markdown(summary: dict, records: list[dict], meta: dict) -> str:
 def metrics_json(summary: dict, meta: dict) -> dict:
     """Metrics only (no answers or question text), for tracking runs over time."""
     keep = ("overall", "abstention", "by_behavior", "by_category", "distance_by_behavior",
-            "distance_margin", "models_resolved")
+            "distance_margin", "models_resolved", "judge")
     return {
         "meta": meta,
         **{k: summary[k] for k in keep if k in summary},

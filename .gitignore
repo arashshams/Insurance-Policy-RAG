@@ -39,3 +39,4 @@ Thumbs.db
 # --- Local evaluation caches (raw answers; reports in eval/reports/ are committed) ---
 notebooks/eval/eval_results.json
 eval/*_results.json
+eval/*_judge.json

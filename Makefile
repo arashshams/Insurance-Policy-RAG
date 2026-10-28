@@ -9,7 +9,7 @@
 PYTHON ?= python
 
 .DEFAULT_GOAL := help
-.PHONY: help setup test lint eval eval-v1 eval-set run-app run-api restore-index clean
+.PHONY: help setup test lint eval eval-v1 judge judge-sheet eval-set run-app run-api restore-index clean
 
 help: ## Show targets and the command each one runs
 	@echo "Targets (plain command in brackets):"
@@ -18,6 +18,8 @@ help: ## Show targets and the command each one runs
 	@echo "  lint           lint the code                       [python -m ruff check .]"
 	@echo "  eval           eval set v2 + report (GEMINI_API_KEY) [python -m src.evaluate]"
 	@echo "  eval-v1        the older v1 eval set (GEMINI_API_KEY) [python -m src.evaluate --questions notebooks/eval/eval_questions.json]"
+	@echo "  judge          LLM-judge cached answers (GEMINI_API_KEY) [python -m src.judge]"
+	@echo "  judge-sheet    human scoring sheet for the judge     [python -m src.judge --sheet]"
 	@echo "  eval-set       validate eval set, rebuild review    [python -m src.eval_set]"
 	@echo "  run-app        Streamlit app on :8501               [python -m streamlit run app/streamlit_app.py]"
 	@echo "  run-api        FastAPI backend on :8000             [python -m uvicorn api.main:app --reload]"
@@ -40,6 +42,14 @@ eval:
 
 eval-v1:
 	$(PYTHON) -m src.evaluate --questions notebooks/eval/eval_questions.json $(ARGS)
+
+# Judge cached answers with the pinned judge model (resumable, budgeted with
+# ARGS="--max-calls N"); then `make eval` puts the scores in the report.
+judge:
+	$(PYTHON) -m src.judge $(ARGS)
+
+judge-sheet:
+	$(PYTHON) -m src.judge --sheet $(ARGS)
 
 # Validate eval/questions_v2.json and regenerate eval/questions_v2_review.md.
 eval-set:
