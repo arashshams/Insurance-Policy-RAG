@@ -50,7 +50,7 @@ The whole pipeline is consolidated into a single importable module, **`src/rag_p
 | Setting | Value |
 |---|---|
 | Embedding model | `gemini-embedding-001` (3072-dim) |
-| Generation model | `gemini-flash-latest` (temperature 0.0) |
+| Generation model | `gemini-3.8-flash`, pinned (temperature 0.0) |
 | Vector store | ChromaDB, cosine space, collection `insurance_policy_cvdb` |
 | Chunking | `cl100k_base` tokenizer, size 800, overlap 128 |
 | Retrieval `k` | 4 (`K_DEFAULT`) |
@@ -175,7 +175,7 @@ An item passes when it shows the right behaviour and, if it should be answered, 
 
 The results below are from eval set v1 (18 questions); v2 results will replace them once a committed v2 report exists.
 
-Cached results expire after 14 days (`--max-age-days`), because the default model name is a moving alias and Gemini's OpenAI-compatible endpoint doesn't report which version served a request. Scoring is re-applied to cached answers on every run, so editing a question's expected keywords or pages doesn't need new API calls.
+The generator model is pinned, so cached answers stay valid until the question, index, model or threshold changes; if you point `INSURANCE_RAG_GEN_MODEL` at a moving `-latest` alias instead, cached answers expire after 14 days (`--max-age-days`), since the endpoint doesn't report which version served a request. Scoring is re-applied to cached answers on every run, so editing a question's expected keywords or pages doesn't need new API calls.
 
 Latest run (October 2026, shipped 38-chunk demo index, `gemini-flash-latest`, 12 in-scope + 6 out-of-scope questions):
 
@@ -210,6 +210,14 @@ make eval-v1     # python -m src.evaluate --questions notebooks/eval/eval_questi
 Answers are cached (`eval/questions_v2_results.json`; `notebooks/eval/eval_results.json` for v1; both git-ignored), so a re-run only re-scores. A full v2 run costs 65 embedding calls and at most 65 generation calls (questions stopped by the threshold skip generation). The Gemini free tier currently allows only about 20 generation requests per day per project, so a full run can take a few days: when the daily quota runs out, the harness stops at once with a message saying how many questions are done, and the next `make eval` continues from the cache. To leave quota for the live demo, cap a run with `make eval ARGS="--max-calls 10"`.
 
 Evaluation runs are sequential and paced to stay within free-tier limits, and no real policy facts are committed.
+
+### Upgrading the model
+
+The generator model is pinned (`gemini-3.8-flash`) rather than a `-latest` alias, because every number above describes one specific model, and the guardrail's second layer (the model refusing near-miss questions) depends on its behaviour. Upgrades are deliberate:
+
+1. Try the new model without changing code: `export INSURANCE_RAG_GEN_MODEL="<new model>"`, then `make eval` and `make judge` (the model name is part of the cache key, so its answers are cached separately).
+2. Compare its report with the current one, starting with the near-miss "I don't know" questions, then pass rate, hallucination rate and correctness.
+3. If it is as good or better, change the default in `src/rag_pipeline.py` and open a PR linking both reports; if not, stay and fix what got worse first (Google announces shutdown dates on its [deprecations page](https://ai.google.dev/gemini-api/docs/deprecations), so plan the switch before then).
 
 ### Calibrating your own policy
 

@@ -47,6 +47,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src import guardrails  # noqa: E402 - after sys.path setup
 from src.rag_pipeline import (  # noqa: E402 - after sys.path setup
+    GEN_MODEL,
     K_DEFAULT,
     GeminiQuotaExhaustedError,
     GeminiUnavailableError,
@@ -162,7 +163,7 @@ def health() -> dict[str, Any]:
         "index_present": os.path.isdir(DEMO_INDEX_DIR),
         "api_key_present": _api_key_present(),
         "auth_required": bool(_api_token()),
-        "model_default": os.environ.get("INSURANCE_RAG_GEN_MODEL", "gemini-flash-latest"),
+        "model_default": GEN_MODEL,
     }
 
 

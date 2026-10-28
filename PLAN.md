@@ -9,21 +9,23 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-10-28 (quota fix merged as PR #24; M1c implemented on branch `m1c-llm-judge`)
+Last updated: 2026-10-28 (M1c merged as PR #25; generator pinned on branch `pin-generator-model`)
 
 ---
 
 ## Where we are (read this first when resuming)
 
-- **Status (2026-10-28):** M0 (PR #21), M1a (PR #22), M1b (PR #23,
-  judge-free metrics + report on eval set v2) and the quota fail-fast fix
-  (PR #24) are merged. M1c (LLM judge) is implemented on branch
-  `m1c-llm-judge`, plan approved by the owner.
-- **Owner to do for M1c:** `make test lint`, PR, merge. Confirm on
+- **Status (2026-10-28):** M0 (PR #21), M1a (PR #22), M1b (PR #23), the
+  quota fail-fast fix (PR #24) and M1c (PR #25, LLM judge) are merged.
+  Pinning the generator model (D15) is implemented on branch
+  `pin-generator-model`; owner to run `make test lint`, PR, merge.
+- **Owner's data collection (as quota allows):** confirm on
   aistudio.google.com/rate-limit that the judge model (`gemini-3.6-flash`,
-  override with `INSURANCE_RAG_JUDGE_MODEL`) has a free daily limit for the
-  project. Then, as quota allows: `make judge` (resumable), `make
-  judge-sheet`, hand-score the CSV, `make eval` for the report.
+  override with `INSURANCE_RAG_JUDGE_MODEL`) has a free daily limit; then
+  daily `make eval` and `make judge` until all items are covered,
+  `make judge-sheet`, hand-score the CSV, a final `make eval` for the
+  report. After the pinning PR, the 9 answers cached under
+  `gemini-flash-latest` are asked again once (model name is in the cache key).
 - **First v2 run in progress, spread over ~3 days** (owner's choice, D13):
   the Gemini free tier allows only **20 generation requests per day** for
   the model behind `gemini-flash-latest` (`gemini-3.8-flash` on
@@ -36,7 +38,8 @@ Last updated: 2026-10-28 (quota fix merged as PR #24; M1c implemented on branch 
   1. Review the full v2 report, with judge scores and judge-human
      agreement, once the daily `make eval` / `make judge` runs cover all
      items (answers: 9/65 on 2026-10-28). This is M1d.
-  2. Then M2 (CI: smoke eval on PRs, budgeted with `--max-calls`).
+  2. Then M2 (CI: smoke eval on PRs, budgeted with `--max-calls`, plus the
+     weekly model check from D15). Propose the plan first.
 - **Check:** whether the live Streamlit app uses the same Gemini key as the
   evaluation. If so, an eval run can exhaust the demo's daily quota; give
   evaluations their own key/project.
@@ -198,9 +201,11 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 
 - 0.37 is calibrated on one sample policy only; uploads use
   `INSURANCE_RAG_UPLOAD_THRESHOLD` (defaults to 0.37) and the UI warns about it.
-- `gemini-flash-latest` is a moving alias and the endpoint does not report
-  the version behind it; eval cache entries expire after 14 days. (A 429
-  quota error on 2026-10-27 named the model behind it: `gemini-3.8-flash`.)
+- The generator is pinned to `gemini-3.8-flash` (D15; until 2026-10-28 it was
+  the moving alias `gemini-flash-latest`, which then pointed to that model).
+  A pinned model can be retired: Google posts shutdown dates on its
+  deprecations page, and forum reports say models sometimes stop accepting
+  new users earlier than announced. The weekly model check (M2) watches for this.
 - **Free-tier quota: 20 generation requests per day** for that model. A full
   v2 run needs up to ~60 generation calls (threshold abstentions need none),
   so it takes ~3 days on the free tier. See D13.
@@ -216,6 +221,7 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | D2 | Raw eval cache `notebooks/eval/eval_results.json` stays git-ignored; commit a **versioned summary per run** instead (`eval/reports/<set-version>_<date>.md` + small metrics JSON). | Satisfies rule 5 without churning a large cache file. | Decided (owner, 2026-10-26) |
 | D3 | **M4 option (a):** upload mode keeps running inside the Streamlit process; the deployed API serves the bundled demo policy. | Cloud hosts may run several instances and stop idle ones, so per-session in-memory indexes on the API would vanish or hit the wrong instance. Alternatives: (b) single-instance API with expiring upload session IDs, (c) re-embed per request (private but costly). | Decided (owner, 2026-10-26) |
 | D4 | LLM judge uses a **pinned** model version, different from the generator: default `gemini-3.6-flash` (`INSURANCE_RAG_JUDGE_MODEL`). | `-latest` aliases make judge scores drift; a different model reduces self-grading bias; on the free tier each model has its own daily quota, so judging doesn't use the generator's. Still a Gemini judge of Gemini answers: agreement with the owner's hand scores is reported. A judge from another provider is a possible later upgrade. | Decided (owner, 2026-10-28) |
+| D15 | **Pin the generator model** (`gemini-3.8-flash`) instead of the `gemini-flash-latest` alias. Cached answers no longer expire for a pinned model (14 days only for an alias). Upgrades are deliberate: evaluate the new model via `INSURANCE_RAG_GEN_MODEL`, compare reports, then change the default (README "Upgrading the model"). A weekly CI job (M2) lists the models the key can use and opens an issue when the pinned model disappears or a newer Flash appears. | Every reported number describes one model; the guardrail's model-refusal layer depends on the generator's behaviour, so a silent switch could change it unmeasured; an alias also forced re-asking all answers every 14 days, wiping judge and human scores. Cost: the app breaks if the pinned model is retired before it is bumped, hence the weekly check. | Decided (owner, 2026-10-28) |
 | D14 | Judge design: one call per item scores **faithfulness** (vs the retrieved passages) and **correctness** (vs the reference answer) on a **0–2** scale; only answered answer/defer items with the right behaviour are judged; prompt is a versioned file whose name + hash are in the cache key; **separate `make judge` step** with its own cache; "strict pass" = judge-free pass + both scores 2; human check on ~20 stratified items with exact / within-one / quadratic-weighted kappa, counted only for the answer the human scored (answer hash). | Few levels give steadier judge scores and an easier human sheet; separate steps keep the generator's and judge's quotas and caches independent; hashes make every score traceable and stale human scores visible. | Decided (owner, 2026-10-28) |
 | D5 | MLflow **wraps the existing harness** (logs its config + metrics) instead of a second eval path. | Rule 4 / single source of metrics. | Proposed (part of M3 plan) |
 | D6 | Threshold/k sweeps reuse cached query embeddings and passage distances; only configurations that change what is retrieved need new generation calls. | Stay inside free-tier limits. | Proposed (part of M3 plan) |
@@ -352,6 +358,9 @@ Mostly done already (42 offline tests; CI on push/PR). Remaining:
   (owner adds it). Skip gracefully when the secret is unavailable
   (e.g. PRs from forks).
 - Full eval: manual (`workflow_dispatch`) and/or weekly schedule.
+- Weekly model check (D15): list the models the API key can use (no
+  generation quota); open/update a GitHub issue when the pinned generator
+  or judge model is no longer listed, or a newer Flash model appears.
 
 ### M3. Experiment tracking with MLflow — `[ ]`
 
@@ -502,3 +511,12 @@ sections. 2–3 resume bullets, describing only what was built.
   generator alias), which invalidates their judgments and human scores;
   the report flags stale human scores. Pinning the generator model would
   avoid this. Agent ran lint only; delivered as a `git am` mailbox.
+- **2026-10-28 — PR #25 (merged).** M1c, the LLM judge.
+- **2026-10-28 — branch `pin-generator-model`.** Owner chose to pin the
+  generator (D15) after discussing automatic vs deliberate upgrades.
+  Default `gemini-3.8-flash`; `rag_pipeline.is_moving_alias()`; answer
+  cache expires only for an alias (`evaluate.default_max_age_days()`, CLI
+  `--max-age-days` default now "auto"); API `/health` reports the
+  configured model; README "Upgrading the model"; notebook 04; 3 offline
+  tests. Weekly model check added to the M2 scope. Agent ran lint only;
+  delivered as a `git am` mailbox.
