@@ -104,12 +104,14 @@ src/
   evaluate.py                       # evaluation harness (CLI: python -m src.evaluate)
   eval_metrics.py                   # judge-free metrics (abstention, retrieval, citations)
   eval_report.py                    # markdown report + metrics JSON per run
+  judge.py                          # LLM judge: faithfulness + correctness, human agreement
   eval_set.py                       # validates eval sets, renders review tables
   guardrails.py                     # rate limiting + idle-upload cleanup
 eval/
   questions_v2.json                 # eval set v2: 65 items, categories, pages, reference answers
   questions_v2_review.md            # generated review table for eval set v2
   reports/                          # one report per evaluation run (<set version>_<date>.md/.json)
+  prompts/judge_v1.md               # versioned judge prompt and rubric
 tests/                              # offline tests (no API key needed)
 .github/workflows/tests.yml         # CI: lint + offline tests
 .streamlit/config.toml              # Streamlit server settings (upload size cap)
@@ -168,6 +170,8 @@ The pipeline is validated end-to-end on the free tier using an evaluation harnes
 - **Headroom:** each question's closest-passage distance *before* the threshold, per expected behaviour, and whether a threshold alone could separate answerable from out-of-scope questions.
 
 An item passes when it shows the right behaviour and, if it should be answered, cites a passage containing its evidence. Each run prints a summary and writes a report with per-behaviour and per-category tables and every failure with its reason: `eval/reports/<set version>_<date>.md`, plus the metrics as JSON. The metric definitions are in `src/eval_metrics.py`.
+
+**LLM judge.** The checks above can't tell whether an answer's content is right. For that, a second, pinned model (`gemini-3.6-flash` by default, deliberately not the generator) reads each answered question with the passages the system saw and the reference answer, and scores *faithfulness* (every claim supported by the passages) and *correctness* (matches the reference answer) from 0 to 2, using the rubric in `eval/prompts/judge_v1.md`. `make judge` judges the cached answers (resumable, budgeted with `ARGS="--max-calls N"`), and the next `make eval` adds a judge section to the report: share of fully correct and fully faithful answers, hallucination rate, and a strict pass rate. To check the judge itself, `make judge-sheet` writes a sample of about 20 answers to score by hand (`eval/questions_v2_judge_sheet.md` and `eval/questions_v2_human_scores.csv`); the report then shows how often the judge agrees with the human scores (exact, within one point, and weighted kappa).
 
 The results below are from eval set v1 (18 questions); v2 results will replace them once a committed v2 report exists.
 

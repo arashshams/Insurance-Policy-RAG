@@ -9,15 +9,21 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-10-27 (M1b merged; first v2 run spread over ~3 days; paused, see "Where we are")
+Last updated: 2026-10-28 (quota fix merged as PR #24; M1c implemented on branch `m1c-llm-judge`)
 
 ---
 
 ## Where we are (read this first when resuming)
 
-- **Status (2026-10-27):** M0 (PR #21), M1a (PR #22) and M1b (PR #23,
-  judge-free metrics + report on eval set v2; 71 offline tests pass) are
-  merged. The owner paused the work here.
+- **Status (2026-10-28):** M0 (PR #21), M1a (PR #22), M1b (PR #23,
+  judge-free metrics + report on eval set v2) and the quota fail-fast fix
+  (PR #24) are merged. M1c (LLM judge) is implemented on branch
+  `m1c-llm-judge`, plan approved by the owner.
+- **Owner to do for M1c:** `make test lint`, PR, merge. Confirm on
+  aistudio.google.com/rate-limit that the judge model (`gemini-3.6-flash`,
+  override with `INSURANCE_RAG_JUDGE_MODEL`) has a free daily limit for the
+  project. Then, as quota allows: `make judge` (resumable), `make
+  judge-sheet`, hand-score the CSV, `make eval` for the report.
 - **First v2 run in progress, spread over ~3 days** (owner's choice, D13):
   the Gemini free tier allows only **20 generation requests per day** for
   the model behind `gemini-flash-latest` (`gemini-3.8-flash` on
@@ -27,13 +33,10 @@ Last updated: 2026-10-27 (M1b merged; first v2 run spread over ~3 days; paused, 
   `make restore-index`. When all 65 are done, the owner pastes the summary
   and the report (`eval/reports/v2.0_<date>.md`).
 - **Next items (propose plans first):**
-  1. Quota fail-fast + `--max-calls`: implemented on branch
-     `fix/quota-fail-fast` (2026-10-28, plan approved); owner to run
-     `make test lint`, open the PR and merge.
-  2. Review the full v2 report and failures (feeds M1d), once the daily
-     `make eval` runs have covered all 65 items (9/65 on 2026-10-28).
-  3. M1c (LLM-as-judge), planned with the 20/day budget in mind (D13).
-     Development is offline; only judge runs need quota.
+  1. Review the full v2 report, with judge scores and judge-human
+     agreement, once the daily `make eval` / `make judge` runs cover all
+     items (answers: 9/65 on 2026-10-28). This is M1d.
+  2. Then M2 (CI: smoke eval on PRs, budgeted with `--max-calls`).
 - **Check:** whether the live Streamlit app uses the same Gemini key as the
   evaluation. If so, an eval run can exhaust the demo's daily quota; give
   evaluations their own key/project.
@@ -148,6 +151,7 @@ with exponential backoff (`_call_with_backoff`); when retries run out,
 | `src/evaluate.py` | Evaluation harness, CLI `python -m src.evaluate` (`--index`, `--pdf`, `--questions`, `--results`, `--report`, `--no-report`, `--no-cache`, `--max-age-days`, `--sleep`). Runs eval set v2 by default; v1 via `make eval-v1`. |
 | `src/eval_metrics.py` | Judge-free metrics: per-item scoring by `behavior`, abstention precision/recall, retrieval, citation/evidence checks, per-behaviour/category aggregation. |
 | `src/eval_report.py` | Markdown report + metrics JSON per run (`eval/reports/<set version>_<date>.md/.json`). |
+| `src/judge.py`, `eval/prompts/judge_v1.md` | LLM judge (M1c): pinned judge model scores faithfulness + correctness 0–2; `make judge` (resumable, `--max-calls`), `make judge-sheet` (human scoring sheet + CSV), judge-human agreement in the report. |
 | `src/guardrails.py` | `RateLimiter` (sliding window) and `UploadIndexRegistry` (idle TTL + cap for in-memory upload indexes). |
 | `app/streamlit_app.py` | Streamlit UI: bundled-policy demo + per-session upload mode. Calls the API over HTTP for the demo when `INSURANCE_RAG_API_URL` is set. |
 | `app/demo_index/` | Committed, pre-built Chroma index of the SAMPLE policy (38 chunks). |
@@ -211,7 +215,8 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | D1 | Keep the distance threshold at **0.37**. | Latest run: near-miss out-of-scope questions overlap real ones (0.335 vs up to 0.344); lowering the cutoff would reject real questions. The model's refusal handles near-misses ("two-layer guardrail"). | Decided |
 | D2 | Raw eval cache `notebooks/eval/eval_results.json` stays git-ignored; commit a **versioned summary per run** instead (`eval/reports/<set-version>_<date>.md` + small metrics JSON). | Satisfies rule 5 without churning a large cache file. | Decided (owner, 2026-10-26) |
 | D3 | **M4 option (a):** upload mode keeps running inside the Streamlit process; the deployed API serves the bundled demo policy. | Cloud hosts may run several instances and stop idle ones, so per-session in-memory indexes on the API would vanish or hit the wrong instance. Alternatives: (b) single-instance API with expiring upload session IDs, (c) re-embed per request (private but costly). | Decided (owner, 2026-10-26) |
-| D4 | LLM judge uses a **pinned** model version, ideally different from the generator. | `-latest` aliases make judge scores drift; a different model reduces self-grading bias. Judge agreement is spot-checked by hand. | Proposed (part of M1 plan) |
+| D4 | LLM judge uses a **pinned** model version, different from the generator: default `gemini-3.6-flash` (`INSURANCE_RAG_JUDGE_MODEL`). | `-latest` aliases make judge scores drift; a different model reduces self-grading bias; on the free tier each model has its own daily quota, so judging doesn't use the generator's. Still a Gemini judge of Gemini answers: agreement with the owner's hand scores is reported. A judge from another provider is a possible later upgrade. | Decided (owner, 2026-10-28) |
+| D14 | Judge design: one call per item scores **faithfulness** (vs the retrieved passages) and **correctness** (vs the reference answer) on a **0–2** scale; only answered answer/defer items with the right behaviour are judged; prompt is a versioned file whose name + hash are in the cache key; **separate `make judge` step** with its own cache; "strict pass" = judge-free pass + both scores 2; human check on ~20 stratified items with exact / within-one / quadratic-weighted kappa, counted only for the answer the human scored (answer hash). | Few levels give steadier judge scores and an easier human sheet; separate steps keep the generator's and judge's quotas and caches independent; hashes make every score traceable and stale human scores visible. | Decided (owner, 2026-10-28) |
 | D5 | MLflow **wraps the existing harness** (logs its config + metrics) instead of a second eval path. | Rule 4 / single source of metrics. | Proposed (part of M3 plan) |
 | D6 | Threshold/k sweeps reuse cached query embeddings and passage distances; only configurations that change what is retrieved need new generation calls. | Stay inside free-tier limits. | Proposed (part of M3 plan) |
 | D7 | Lint with **ruff** (pinned in `requirements-dev.txt`), config in `ruff.toml`; notebooks excluded from lint. | Fast, one tool; notebooks contain Colab shell/magic lines. | Done in M0 |
@@ -312,15 +317,23 @@ commits: the feature and a log-wording fix for an existing test).
 - [~] First full v2 run: over ~3 days because of the free-tier quota (D13);
   8/65 done on day 1.
 
-**M1c — LLM-as-judge.**
-- Faithfulness (answer supported by retrieved text) and correctness (vs
-  `reference_answer`), integer scale with rubric; prompt versioned in a file
-  (e.g. `eval/prompts/judge_v1.md`).
-- Pinned judge model (D4); judge calls cached and paced like the rest.
-- Budget: each judged item costs extra generation calls on top of the
-  answer, against a free tier of 20 generation requests/day (D13); the plan
-  must say how a judged run fits (daily batches, a sample, or a paid key).
-- Hand-scoring sheet for ~20 sampled items; report judge–human agreement.
+**M1c — LLM-as-judge.** `[~]` implemented on branch `m1c-llm-judge`
+(D4, D14); waiting for the owner's test run and PR.
+- [x] `eval/prompts/judge_v1.md`: rubric (shared with the human sheet),
+  system and user messages; passages are delimited as data.
+- [x] `src/judge.py`: eligibility, prompt rendering, JSON parsing (fences,
+  stray text, string digits; bad replies retried next run), cache keyed on
+  item + answer + passages + model + prompt hash, budget (`--max-calls`) and
+  daily-quota stop, metrics (coverage, fully correct/faithful, hallucination
+  rate, strict pass), stratified fixed-seed sample, sheet + CSV, agreement.
+- [x] Budget (D13): at most one judge call per eligible item (≤ ~47 for
+  v2), on the judge model's own daily quota; resumable across days.
+- [x] Report: "LLM judge" section (marked not final until coverage is
+  complete), judge vs human table, answers below full marks with reasons;
+  judge metrics in the JSON and the console summary.
+- [x] 21 offline tests; Makefile `judge`, `judge-sheet`; README.
+- [ ] Owner: `make test lint`, merge; confirm the judge model's free quota;
+  run `make judge`, `make judge-sheet`, hand-score, `make eval`.
 
 **M1d — committed report + failure analysis.**
 - `eval/reports/<set-version>_<date>.md` (+ metrics JSON) per D2; README
@@ -478,3 +491,14 @@ sections. 2–3 resume bullets, describing only what was built.
   `generation_calls`. API returns 503 with `Retry-After` from Gemini's
   delay; the app shows the API's explanation. 7 offline tests; agent ran
   lint only. Delivered as a `git am` mailbox.
+- **2026-10-28 — PR #24 (merged).** Quota fail-fast + `--max-calls`.
+- **2026-10-28 — branch `m1c-llm-judge`.** Owner approved the M1c plan with
+  the recommended options: judge `gemini-3.6-flash` (pinned, own free-tier
+  quota per Google's docs/forum: limits are per project and per model),
+  0–2 scale, separate `make judge` step. Added `src/judge.py`,
+  `eval/prompts/judge_v1.md`, report/summary integration, `make judge`,
+  `make judge-sheet`, 21 offline tests; decisions D4 (decided) and D14.
+  Note: answers regenerate when the 14-day cache expires (moving
+  generator alias), which invalidates their judgments and human scores;
+  the report flags stale human scores. Pinning the generator model would
+  avoid this. Agent ran lint only; delivered as a `git am` mailbox.

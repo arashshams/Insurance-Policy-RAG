@@ -59,6 +59,7 @@ if str(REPO_ROOT) not in sys.path:
 from src import eval_metrics as em  # noqa: E402
 from src import eval_report as er  # noqa: E402
 from src import eval_set as es  # noqa: E402
+from src import judge as jd  # noqa: E402
 from src import rag_pipeline as rp  # noqa: E402
 
 V2_QUESTIONS = REPO_ROOT / "eval" / "questions_v2.json"
@@ -181,11 +182,13 @@ class EvalIncomplete(RuntimeError):
     running again continues where this run stopped."""
 
     def __init__(self, reason: str, done: int, total: int, new: int, calls: int,
-                 skipped_ids: list[str], retry_after_s: float | None = None):
+                 skipped_ids: list[str], retry_after_s: float | None = None,
+                 records: list[dict] | None = None):
         super().__init__(reason)
         self.reason, self.done, self.total = reason, done, total
         self.new, self.calls, self.skipped_ids = new, calls, skipped_ids
         self.retry_after_s = retry_after_s
+        self.records = records or []  # the scored records that do have answers
 
     def message(self) -> str:
         return (f"Stopped early: {self.reason}\n"
@@ -282,8 +285,40 @@ def run_eval(
     if skipped:
         raise EvalIncomplete(stop_reason or "stopped.", done=len(records), total=len(items),
                              new=new, calls=calls, skipped_ids=skipped,
-                             retry_after_s=retry_after_s)
+                             retry_after_s=retry_after_s, records=records)
     return records, summarize(records, category_order=list(qset.get("categories") or []))
+
+
+def cached_records(qset: dict, index_label: str, cache: dict,
+                   chunk_texts: dict[str, str] | None = None,
+                   max_age_days: float | None = DEFAULT_MAX_AGE_DAYS) -> tuple[list[dict], int]:
+    """The scored records of every question that already has a (fresh) cached
+    answer, without any API call; returns (records, number of questions)."""
+    def _no_calls(_question):
+        raise AssertionError("cached_records must not call the API")
+
+    try:
+        records, _ = run_eval(qset, _no_calls, index_label, cache=cache, sleep_between=0,
+                              log=lambda _: None, max_age_days=max_age_days,
+                              chunk_texts=chunk_texts, max_calls=0)
+    except EvalIncomplete as stop:
+        records = stop.records
+    return records, len(es.items_of(qset))
+
+
+def add_judge_results(summary: dict, records: list[dict], qset: dict,
+                      questions_path: str | Path) -> None:
+    """Attach cached LLM-judge scores (src/judge.py) to the records and add a
+    "judge" section to the summary, if any judgments exist for this set."""
+    judge_cache = jd.load_json(jd.judge_path_for(questions_path))
+    human_rows = jd.load_human_scores(jd.human_scores_path_for(questions_path))
+    if not judge_cache and not human_rows:
+        return
+    prompt = jd.load_prompt()
+    items_by_id = {i["id"]: i for i in es.items_of(qset)}
+    jd.attach_judgments(records, items_by_id, judge_cache, prompt, jd.JUDGE_MODEL)
+    summary["judge"] = jd.summarize_judge(records, prompt, jd.JUDGE_MODEL,
+                                          list(qset.get("categories") or []), human_rows)
 
 
 def suggest_threshold(records: list[dict]) -> dict:
@@ -413,6 +448,14 @@ def format_summary(s: dict, index_label: str) -> str:
     failures = s.get("failures") or []
     if failures:
         lines.append(f"Failed items ({len(failures)}): " + ", ".join(f["id"] for f in failures))
+    j = s.get("judge")
+    if j:
+        g = j["overall"]
+        lines.append(
+            f"LLM judge ({j['model']}, {j['prompt']}): judged {g['n_judged']}/{g['n_eligible']}; "
+            f"fully correct {pct(g['fully_correct'])}, fully faithful {pct(g['fully_faithful'])}, "
+            f"hallucination {pct(g['hallucination_rate'])}; strict pass "
+            f"{pct(g['strict_pass_rate']) if g['strict_pass_rate'] is not None else 'n/a (judge incomplete)'}")
     return "\n".join(lines)
 
 
@@ -525,6 +568,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nStopped: {exc}\nAnswers so far are cached; run `make eval` again to "
               "continue.", file=sys.stderr)
         return 3
+    add_judge_results(summary, records, qset, questions_path)
     print()
     print(format_summary(summary, index_label))
 
