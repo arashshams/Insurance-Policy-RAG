@@ -574,3 +574,102 @@ def test_summary_separates_threshold_and_model_refusals():
     assert "1 / 1 of 2" in text and "the model's refusal caught the rest" in text
     assert any("(model refused)" in line for line in logs)
     assert any("(threshold)" in line for line in logs)
+
+
+# --- daily quota: fail fast, budget the evaluation --------------------------------
+def _quota_error(delay="48341s", quota_id="GenerateRequestsPerDayPerProjectPerModel-FreeTier"):
+    """A 429 shaped like Gemini's free-tier quota error (body is a JSON list)."""
+    import httpx
+    import openai
+
+    req = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
+    body = [{"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "details": [
+        {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+         "violations": [{"quotaId": quota_id}]},
+        {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": delay},
+    ]}}]
+    return openai.RateLimitError(f"Error code: 429 - {body}",
+                                 response=httpx.Response(429, request=req), body=body)
+
+
+def test_daily_quota_fails_fast_without_retrying(monkeypatch):
+    slept = []
+    monkeypatch.setattr(rp.time, "sleep", slept.append)
+    flaky = _Flaky([_quota_error()], "ok")
+    with pytest.raises(rp.GeminiQuotaExhaustedError) as err:
+        rp._call_with_backoff(flaky, "generation")
+    assert flaky.calls == 1 and slept == []  # no retries, no waiting
+    assert err.value.retry_after_s == 48341 and "about 13 hours" in str(err.value)
+    assert isinstance(err.value, rp.GeminiUnavailableError)  # old handlers still catch it
+
+
+def test_long_quota_delay_fails_fast_but_short_rate_limit_is_retried(no_sleep):
+    flaky = _Flaky([_quota_error(delay="900s", quota_id="RequestsPerHour")], "ok")
+    with pytest.raises(rp.GeminiQuotaExhaustedError, match="about 15 minutes"):
+        rp._call_with_backoff(flaky, "embedding")
+    flaky = _Flaky([_quota_error(
+        delay="20s", quota_id="GenerateRequestsPerMinutePerProjectPerModel-FreeTier")], "ok")
+    assert rp._call_with_backoff(flaky, "generation") == "ok" and flaky.calls == 2
+
+
+def test_client_leaves_retries_to_the_pipeline(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    assert rp.get_client().max_retries == 0
+
+
+def test_generation_calls_are_counted(monkeypatch, fake_embeddings):
+    monkeypatch.setattr(rp, "get_client", lambda: _fake_client("Covered [doc_0]."))
+    assert rp.answer_question_detailed(_FakeCollection(0.2), "q")["generation_calls"] == 1
+    monkeypatch.setattr(rp, "get_client",
+                        lambda: _fake_client("Covered [doc_0].", finish_reason="length"))
+    assert rp.answer_question_detailed(_FakeCollection(0.2), "q")["generation_calls"] == 2
+    assert rp.answer_question_detailed(_FakeCollection(0.9), "q")["generation_calls"] == 0
+
+
+def test_api_maps_daily_quota_to_503_with_reset_time(api_client, monkeypatch):
+    api_main, client = api_client
+
+    def out_of_quota(*a, **k):
+        raise rp.GeminiQuotaExhaustedError("quota used up", retry_after_s=48341.2)
+    monkeypatch.setattr(api_main, "answer_question_detailed", out_of_quota)
+    r = client.post("/ask", json={"question": "Is physio covered?"})
+    assert r.status_code == 503 and r.headers["Retry-After"] == "48342"
+    assert "quota" in r.json()["detail"]
+
+
+def test_eval_stops_on_daily_quota_and_resumes_from_cache():
+    calls = []
+
+    def fn(q):
+        calls.append(q)
+        if len(calls) == 2:
+            raise rp.GeminiQuotaExhaustedError("quota used up", retry_after_s=100.0)
+        return _answer_fn(q)
+
+    cache, kw = {}, dict(sleep_between=0, log=lambda _: None)
+    with pytest.raises(ev.EvalIncomplete) as err:
+        ev.run_eval(PAGED_QSET, fn, "idx", cache=cache, **kw)
+    stop = err.value
+    assert len(calls) == 2  # stopped asking after the quota error
+    assert (stop.done, stop.total, stop.new) == (1, 3, 1)
+    assert stop.skipped_ids == ["in_02", "out_01"] and stop.retry_after_s == 100.0
+    assert "1/3 questions" in stop.message() and len(cache) == 1
+
+    _, s = ev.run_eval(PAGED_QSET, fn, "idx", cache=cache, **kw)  # quota is back
+    assert len(calls) == 4 and s["n_items"] == 3  # only the 2 missing ones re-asked
+
+
+def test_eval_max_calls_budget_still_scores_cached_answers():
+    calls = []
+    fn = lambda q: (calls.append(q), _answer_fn(q))[1]  # noqa: E731
+    cache, kw = {}, dict(sleep_between=0, log=lambda _: None)
+    only_out = {**PAGED_QSET, "in_scope": []}
+    ev.run_eval(only_out, fn, "idx", cache=cache, **kw)  # out_01 now cached
+    calls.clear()
+
+    with pytest.raises(ev.EvalIncomplete) as err:
+        ev.run_eval(PAGED_QSET, fn, "idx", cache=cache, max_calls=1, **kw)
+    stop = err.value
+    assert calls == ["Is physio covered?"]  # in_01 cost the one allowed call
+    assert stop.skipped_ids == ["in_02"] and stop.done == 2 and stop.calls == 1
+    assert "--max-calls 1" in stop.reason

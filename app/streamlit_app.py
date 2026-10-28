@@ -268,6 +268,15 @@ def _answer_via_api(question: str) -> dict:
     resp = requests.post(
         f"{API_URL}/ask", json={"question": question}, headers=headers, timeout=60
     )
+    if resp.status_code >= 400:
+        # Show the API's own explanation (e.g. "the daily quota is used up,
+        # try again in about 13 hours") instead of a bare "503 Server Error".
+        try:
+            detail = resp.json().get("detail")
+        except Exception:  # noqa: BLE001 - non-JSON error body
+            detail = None
+        if isinstance(detail, str) and detail:
+            raise RuntimeError(detail)
     resp.raise_for_status()
     data = resp.json()
     retrieved = [

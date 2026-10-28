@@ -48,6 +48,7 @@ if str(REPO_ROOT) not in sys.path:
 from src import guardrails  # noqa: E402 - after sys.path setup
 from src.rag_pipeline import (  # noqa: E402 - after sys.path setup
     K_DEFAULT,
+    GeminiQuotaExhaustedError,
     GeminiUnavailableError,
     answer_question_detailed,
     load_persistent_collection,
@@ -188,6 +189,12 @@ def ask(
 
     try:
         result = answer_question_detailed(collection, req.question, k=req.k)
+    except GeminiQuotaExhaustedError as exc:
+        # Daily quota used up: tell the client when it resets, not "in a minute".
+        wait = int(exc.retry_after_s) + 1 if exc.retry_after_s else 3600
+        raise HTTPException(
+            status_code=503, detail=str(exc), headers={"Retry-After": str(wait)}
+        ) from exc
     except GeminiUnavailableError as exc:
         # Gemini overloaded / rate-limited even after the pipeline's retries:
         # a temporary condition, so tell the client to come back later.
