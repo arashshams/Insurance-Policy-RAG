@@ -159,10 +159,40 @@ def _record_from_result(q: dict, res: dict, index_label: str, now: float) -> dic
         "abstained": bool(res["abstained"]),
         "citations_verified": res.get("citations_verified"),
         "finish_reason": res.get("finish_reason"),
+        "generation_calls": _generation_calls(res),
         "index": index_label, "model": rp.GEN_MODEL,
         "model_resolved": res.get("model_resolved"),
         "evaluated_at": now,
     }
+
+
+def _generation_calls(res: dict) -> int:
+    """Generation requests one answer cost. Older pipelines / test fakes don't
+    report it: assume one call whenever something passed the threshold."""
+    n = res.get("generation_calls")
+    if isinstance(n, int):
+        return n
+    return 1 if res.get("retrieved") else 0
+
+
+class EvalIncomplete(RuntimeError):
+    """The run stopped before every question had an answer: the daily Gemini
+    quota ran out or --max-calls was reached. Answers so far are cached, so
+    running again continues where this run stopped."""
+
+    def __init__(self, reason: str, done: int, total: int, new: int, calls: int,
+                 skipped_ids: list[str], retry_after_s: float | None = None):
+        super().__init__(reason)
+        self.reason, self.done, self.total = reason, done, total
+        self.new, self.calls, self.skipped_ids = new, calls, skipped_ids
+        self.retry_after_s = retry_after_s
+
+    def message(self) -> str:
+        return (f"Stopped early: {self.reason}\n"
+                f"{self.done}/{self.total} questions have answers ({self.new} new this run, "
+                f"{self.calls} generation call(s)). They are cached: run `make eval` again "
+                "later to continue from here. No report is written until all questions "
+                "are answered, so the numbers above are not a result yet.")
 
 
 _TAG = {"answer": "ANS", "defer": "DEF", "abstain": "ABS"}
@@ -190,6 +220,7 @@ def run_eval(
     max_age_days: float | None = DEFAULT_MAX_AGE_DAYS,
     clock: Callable[[], float] = time.time,
     chunk_texts: dict[str, str] | None = None,
+    max_calls: int | None = None,
 ) -> tuple[list[dict], dict]:
     """Run every question through answer_fn and return (records, summary).
 
@@ -201,19 +232,44 @@ def run_eval(
     (None = never expire). Scoring is recomputed for cached records too, so
     edits to the set's expectations always apply. chunk_texts (chunk id ->
     text of the evaluated index) enables the evidence metrics.
+
+    Budget: max_calls caps the generation calls this run may make (checked
+    before each uncached question, so a truncated answer's retry can take it
+    one over). When the cap is reached or Gemini reports its daily quota is
+    used up, uncached questions are skipped (cached ones are still scored) and
+    EvalIncomplete is raised at the end instead of returning a summary.
     """
     cache = {} if cache is None else cache
     idk = qset.get("idk_answer", rp.IDK_ANSWER)
     max_age_s = None if max_age_days is None else max_age_days * 86400
     records: list[dict] = []
+    items = es.items_of(qset)
+    calls = new = 0
+    stop_reason: str | None = None
+    retry_after_s: float | None = None
+    skipped: list[str] = []
 
-    for q in es.items_of(qset):
+    for q in items:
         key = _cache_key(q, index_label)
         if key in cache and _is_fresh(cache[key], max_age_s, clock()):
             rec = cache[key]
         else:
-            res = _normalize_result(answer_fn(q["question"]), idk)
+            if stop_reason is None and max_calls is not None and calls >= max_calls:
+                stop_reason = f"reached --max-calls {max_calls}."
+            if stop_reason is not None:
+                skipped.append(q["id"])
+                continue
+            try:
+                out = answer_fn(q["question"])
+            except rp.GeminiQuotaExhaustedError as exc:
+                stop_reason, retry_after_s = str(exc), exc.retry_after_s
+                skipped.append(q["id"])
+                log(f"STOP {q['id']}: {exc}")
+                continue
+            res = _normalize_result(out, idk)
             rec = _record_from_result(q, res, index_label, clock())
+            calls += rec["generation_calls"]
+            new += 1
             cache[key] = rec
             if save_cache:
                 save_cache(cache)  # incremental: a crash never loses progress
@@ -223,6 +279,10 @@ def run_eval(
         records.append(rec)
         log(_log_line(rec))
 
+    if skipped:
+        raise EvalIncomplete(stop_reason or "stopped.", done=len(records), total=len(items),
+                             new=new, calls=calls, skipped_ids=skipped,
+                             retry_after_s=retry_after_s)
     return records, summarize(records, category_order=list(qset.get("categories") or []))
 
 
@@ -391,6 +451,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-age-days", type=float, default=DEFAULT_MAX_AGE_DAYS,
                     help="re-run cached results older than this (0 = never expire)")
     ap.add_argument("--sleep", type=float, default=2.0, help="seconds between API calls")
+    ap.add_argument("--max-calls", type=int, default=None,
+                    help="stop after this many generation calls (cached answers are free); "
+                         "run again later to continue. Useful on the free tier's daily limit")
     args = ap.parse_args(argv)
 
     questions_path = Path(args.questions)
@@ -442,16 +505,26 @@ def main(argv: list[str] | None = None) -> int:
         results_path.parent.mkdir(parents=True, exist_ok=True)
         results_path.write_text(json.dumps(c, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    records, summary = run_eval(
-        qset,
-        answer_fn=lambda q: rp.answer_question_detailed(collection, q),
-        index_label=index_label,
-        cache=cache,
-        save_cache=_save,
-        sleep_between=args.sleep,
-        max_age_days=args.max_age_days or None,
-        chunk_texts=chunk_texts,
-    )
+    try:
+        records, summary = run_eval(
+            qset,
+            answer_fn=lambda q: rp.answer_question_detailed(collection, q),
+            index_label=index_label,
+            cache=cache,
+            save_cache=_save,
+            sleep_between=args.sleep,
+            max_age_days=args.max_age_days or None,
+            chunk_texts=chunk_texts,
+            max_calls=args.max_calls,
+        )
+    except EvalIncomplete as stop:
+        print()
+        print(stop.message())
+        return 3
+    except rp.GeminiUnavailableError as exc:  # transient errors outlasted the retries
+        print(f"\nStopped: {exc}\nAnswers so far are cached; run `make eval` again to "
+              "continue.", file=sys.stderr)
+        return 3
     print()
     print(format_summary(summary, index_label))
 

@@ -104,6 +104,15 @@ SCRAMBLE_THRESHOLD = float(os.environ.get("INSURANCE_RAG_SCRAMBLE_THRESHOLD", "0
 QUERY_MAX_RETRIES = int(os.environ.get("INSURANCE_RAG_MAX_RETRIES", "5"))
 QUERY_INITIAL_SLEEP = float(os.environ.get("INSURANCE_RAG_INITIAL_SLEEP", "2.0"))
 
+# A 429 is NOT retried when Gemini says the quota resets later than this
+# (seconds), or when it names a per-day quota: the free tier's daily request
+# limit can't be waited out with backoff, so we fail fast instead.
+LONG_QUOTA_RETRY_S = float(os.environ.get("INSURANCE_RAG_LONG_QUOTA_S", "300"))
+
+# Per-request timeout (seconds) for Gemini calls, so a stalled connection
+# fails and is retried instead of hanging for the client's 10-minute default.
+REQUEST_TIMEOUT_S = float(os.environ.get("INSURANCE_RAG_REQUEST_TIMEOUT", "60"))
+
 # Abstention answer returned when nothing relevant is retrieved
 IDK_ANSWER = "I don't know"
 
@@ -156,12 +165,60 @@ class GeminiUnavailableError(RuntimeError):
     """Gemini kept failing with transient errors after every retry."""
 
 
+class GeminiQuotaExhaustedError(GeminiUnavailableError):
+    """Gemini's quota is used up until a reset hours away (e.g. the free
+    tier's daily request limit), so retrying now is pointless.
+
+    `retry_after_s` is Gemini's suggested wait in seconds, if it gave one.
+    Subclasses GeminiUnavailableError, so callers that handle that keep working.
+    """
+
+    def __init__(self, message: str, retry_after_s: float | None = None):
+        super().__init__(message)
+        self.retry_after_s = retry_after_s
+
+
+def _quota_info(exc) -> tuple[bool, float | None]:
+    """From a 429, return (long_window, retry_after_seconds).
+
+    Gemini's error body names the exhausted quota (e.g.
+    "GenerateRequestsPerDayPerProjectPerModel-FreeTier") and a retryDelay
+    like "48341s". long_window is True for a per-day quota or a delay longer
+    than LONG_QUOTA_RETRY_S. Parsed defensively: any format change just means
+    "not recognised", which falls back to the normal retries.
+    """
+    import json
+    import re
+
+    try:
+        blob = json.dumps(getattr(exc, "body", None), default=str)
+    except Exception:
+        blob = ""
+    blob += " " + str(exc)
+    m = re.search(r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)s", blob)
+    delay = float(m.group(1)) if m else None
+    long_window = "PerDay" in blob or (delay is not None and delay > LONG_QUOTA_RETRY_S)
+    return long_window, delay
+
+
+def _humanize_seconds(seconds: float | None) -> str:
+    if seconds is None:
+        return "after the quota resets (usually the next day)"
+    if seconds >= 5400:
+        return f"in about {round(seconds / 3600)} hours"
+    if seconds >= 3600:
+        return "in about an hour"
+    return f"in about {max(1, round(seconds / 60))} minutes"
+
+
 def _call_with_backoff(fn, what: str):
     """Call fn(), retrying transient Gemini errors with exponential backoff.
 
     Retries up to QUERY_MAX_RETRIES times, sleeping QUERY_INITIAL_SLEEP
     seconds before the first retry and doubling each time. Raises
     GeminiUnavailableError (chained to the last error) if it never succeeds.
+    A 429 for a quota that resets hours later (daily limit) is not retried:
+    it raises GeminiQuotaExhaustedError straight away.
     """
     retries = 0
     sleep_time = QUERY_INITIAL_SLEEP
@@ -169,6 +226,15 @@ def _call_with_backoff(fn, what: str):
         try:
             return fn()
         except _RETRYABLE_ERRORS as exc:
+            if isinstance(exc, RateLimitError):
+                long_window, delay = _quota_info(exc)
+                if long_window:
+                    raise GeminiQuotaExhaustedError(
+                        f"Gemini's request quota for {what} is used up "
+                        "(the free tier allows a fixed number of requests per day). "
+                        f"Please try again {_humanize_seconds(delay)}.",
+                        retry_after_s=delay,
+                    ) from exc
             retries += 1
             if retries > QUERY_MAX_RETRIES:
                 kind = ("rate-limited" if isinstance(exc, RateLimitError)
@@ -209,8 +275,14 @@ def _read_api_key() -> str:
 
 
 def get_client() -> OpenAI:
-    """Create an OpenAI-compatible client pointed at the Gemini endpoint."""
-    return OpenAI(api_key=_read_api_key(), base_url=GEMINI_BASE_URL)
+    """Create an OpenAI-compatible client pointed at the Gemini endpoint.
+
+    The client's own retries are off (max_retries=0): _call_with_backoff is
+    the one retry policy. With both on, every attempt was retried again
+    inside the client, which multiplied the waiting on a quota error.
+    """
+    return OpenAI(api_key=_read_api_key(), base_url=GEMINI_BASE_URL,
+                  max_retries=0, timeout=REQUEST_TIMEOUT_S)
 
 
 # Batch size for embedding many chunks at once (index build).
@@ -602,6 +674,9 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
       model_resolved      model name the API reported back, if any (Gemini's
                           OpenAI-compatible endpoint echoes the requested name)
       finish_reason       generation finish reason, if generation ran
+      generation_calls    generation requests made (0 if the threshold
+                          short-circuited, 2 if a truncated answer was retried);
+                          lets the evaluation budget the daily quota
     If nothing passes the threshold, short-circuits to IDK_ANSWER without
     calling the LLM.
     """
@@ -625,6 +700,7 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
         "model_requested": model_name,
         "model_resolved": None,
         "finish_reason": None,
+        "generation_calls": 0,
     }
 
     # Short-circuit: no grounded context -> "I don't know" (no LLM call).
@@ -653,9 +729,11 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
         )
         if extra_body:
             kwargs["extra_body"] = extra_body
-        return _call_with_backoff(
+        response = _call_with_backoff(
             lambda: client.chat.completions.create(**kwargs), "generation"
         )
+        result["generation_calls"] += 1
+        return response
 
     response = _generate(GEN_MAX_TOKENS)
     finish_reason = getattr(response.choices[0], "finish_reason", None)

@@ -26,13 +26,14 @@ Last updated: 2026-10-27 (M1b merged; first v2 run spread over ~3 days; paused, 
   `make eval` once a day; each run resumes from the cache. Then
   `make restore-index`. When all 65 are done, the owner pastes the summary
   and the report (`eval/reports/v2.0_<date>.md`).
-- **Next items when the owner is back (propose plans first):**
-  1. Small fix: fail fast on a *daily*-quota 429 (`RESOURCE_EXHAUSTED`,
-     long `retryDelay`) instead of retrying 5x with backoff on top of the
-     `openai` client's own retries (day 1 hung ~15 minutes before failing);
-     print "daily quota reached, N/65 done, run again after the reset".
-  2. Review the full v2 report and failures (feeds M1d).
+- **Next items (propose plans first):**
+  1. Quota fail-fast + `--max-calls`: implemented on branch
+     `fix/quota-fail-fast` (2026-10-28, plan approved); owner to run
+     `make test lint`, open the PR and merge.
+  2. Review the full v2 report and failures (feeds M1d), once the daily
+     `make eval` runs have covered all 65 items (9/65 on 2026-10-28).
   3. M1c (LLM-as-judge), planned with the 20/day budget in mind (D13).
+     Development is offline; only judge runs need quota.
 - **Check:** whether the live Streamlit app uses the same Gemini key as the
   evaluation. If so, an eval run can exhaust the demo's daily quota; give
   evaluations their own key/project.
@@ -218,7 +219,7 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | D10 | **Recall@k is measured on evidence phrases**, not on `expected_pages`: the share of an item's evidence phrases inside the retrieved chunks (after and before the threshold). Page hit@k uses `expected_pages`. | `expected_pages` lists acceptable pages (any one may hold the answer), so recall against all of them would penalize correct retrievals; every evidence phrase is text the answer needs. | Done in M1b |
 | D11 | **Item pass** = correct behaviour + (for answer/defer) a cited chunk contains an evidence phrase. A correct `defer` is an answer that mentions "Schedule of Benefits" and cites the deferring passage. Citation metrics count only answered items; a citation-less answer (pipeline's page fallback) counts as no citation. | Judge-free proxy for "grounded and on target"; content correctness is M1c's job. | Done in M1b (owner approved) |
 | D12 | `make eval` runs **v2** by default; v1 stays runnable (`make eval-v1`, own cache). Each set has its own git-ignored answer cache (`eval/questions_v2_results.json`). Reports for `--pdf` runs go next to the results file, never into `eval/reports/`. | v2 is the new ground truth; separate caches never mix; private-policy answers stay out of the repo (rule 2). | Done in M1b (owner approved) |
-| D13 | **Free-tier eval budget:** the first full v2 run is spread over ~3 days (resumable cache) rather than enabling billing or switching to a model with a higher free limit. Open question for M1c–M3: the judge, PR smoke evals and sweeps multiply calls, so each needs either a small daily budget or an optional, documented paid eval key (rule 1). A cheaper model is not used for headline numbers, since it would not measure what the app ships. | 20 generation requests/day on the free tier (2026-10-27). | Decided for the v2 run (owner, 2026-10-27); revisit in M1c plan |
+| D13 | **Free-tier eval budget:** the first full v2 run is spread over ~3 days (resumable cache) rather than enabling billing or switching to a model with a higher free limit. Open question for M1c–M3: the judge, PR smoke evals and sweeps multiply calls, so each needs either a small daily budget or an optional, documented paid eval key (rule 1). A cheaper model is not used for headline numbers, since it would not measure what the app ships. | 20 generation requests/day on the free tier (2026-10-27). | Decided for the v2 run (owner, 2026-10-27); `--max-calls` added 2026-10-28 to budget runs; revisit in M1c plan |
 | D9 | The eval set is validated like code (`src/eval_set.py` + `tests/test_eval_set.py`): schema, every evidence phrase present on its stated page of the demo index, review table in sync, all v1 questions carried over unchanged. | Ground truth for every quality claim; catches typos and wrong pages before they become wrong metrics. | Done in M1a |
 
 ## 6. Milestones
@@ -462,3 +463,18 @@ sections. 2–3 resume bullets, describing only what was built.
   Owner chose to spread the run over ~3 days (D13). **Paused.** Next: owner
   finishes the run with daily `make eval`; then the fail-fast quota fix,
   the v2 report review, and M1c (propose plans first).
+- **2026-10-28 — first v2 run, day 2.** Only 1 new item (9/65) before the
+  daily quota ran out again: ~19 of the project's 20 requests were used
+  elsewhere first (likely the live demo; the quota is per project, so a
+  separate Google Cloud project for evaluation is the free fix). Owner
+  runs `make eval` when quota allows; development continues meanwhile.
+- **2026-10-28 — branch `fix/quota-fail-fast`.** A 429 for a per-day quota
+  (or `retryDelay` > 5 min) raises `GeminiQuotaExhaustedError` at once, no
+  retries; the `openai` client's own retries are off (`max_retries=0`, one
+  retry policy) with a 60 s request timeout. The harness skips uncached
+  questions after that, still scores cached ones, prints "N/65 done, run
+  again later" and exits 3 without a partial report. New `--max-calls N`
+  caps generation calls per run; `answer_question_detailed()` reports
+  `generation_calls`. API returns 503 with `Retry-After` from Gemini's
+  delay; the app shows the API's explanation. 7 offline tests; agent ran
+  lint only. Delivered as a `git am` mailbox.

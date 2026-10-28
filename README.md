@@ -203,7 +203,7 @@ make eval        # python -m src.evaluate: eval set v2 on app/demo_index/, write
 make eval-v1     # python -m src.evaluate --questions notebooks/eval/eval_questions.json
 ```
 
-Answers are cached (`eval/questions_v2_results.json`; `notebooks/eval/eval_results.json` for v1; both git-ignored), so a re-run only re-scores. A full v2 run costs 65 embedding calls and at most 65 generation calls (questions stopped by the threshold skip generation); with the default 2-second pacing it takes roughly 5–8 minutes on the free tier.
+Answers are cached (`eval/questions_v2_results.json`; `notebooks/eval/eval_results.json` for v1; both git-ignored), so a re-run only re-scores. A full v2 run costs 65 embedding calls and at most 65 generation calls (questions stopped by the threshold skip generation). The Gemini free tier currently allows only about 20 generation requests per day per project, so a full run can take a few days: when the daily quota runs out, the harness stops at once with a message saying how many questions are done, and the next `make eval` continues from the cache. To leave quota for the live demo, cap a run with `make eval ARGS="--max-calls 10"`.
 
 Evaluation runs are sequential and paced to stay within free-tier limits, and no real policy facts are committed.
 
