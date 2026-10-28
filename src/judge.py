@@ -526,7 +526,8 @@ def main(argv: list[str] | None = None) -> int:
     chunk_texts = {c["id"]: c["text"] for c in es.chunks_from_collection(collection)}
     results_path = Path(args.results) if args.results else ev.results_path_for(questions_path)
     answers = load_json(results_path)
-    records, total = ev.cached_records(qset, index_label, answers, chunk_texts)
+    records, total = ev.cached_records(qset, index_label, answers, chunk_texts,
+                                       max_age_days=ev.default_max_age_days())
     print(f"Answers cached: {len(records)}/{total} (from {results_path.name}).")
     prompt = load_prompt()
 
@@ -551,7 +552,7 @@ def main(argv: list[str] | None = None) -> int:
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    if JUDGE_MODEL == rp.GEN_MODEL or "latest" in JUDGE_MODEL:
+    if JUDGE_MODEL == rp.GEN_MODEL or rp.is_moving_alias(JUDGE_MODEL):
         print(f"note: judge model '{JUDGE_MODEL}' should be a pinned version that differs "
               f"from the generator ('{rp.GEN_MODEL}'); see PLAN.md D4.")
     print(f"Judge: {JUDGE_MODEL}, prompt {prompt.name} ({prompt.sha})")

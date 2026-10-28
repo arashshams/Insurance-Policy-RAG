@@ -48,7 +48,18 @@ COLLECTION_NAME = os.environ.get("INSURANCE_RAG_COLLECTION", "insurance_policy_c
 
 # --- Models (Gemini via the OpenAI-compatible endpoint) ----------------------
 EMBED_MODEL = os.environ.get("INSURANCE_RAG_EMBED_MODEL", "gemini-embedding-001")
-GEN_MODEL = os.environ.get("INSURANCE_RAG_GEN_MODEL", "gemini-flash-latest")
+# Pinned on purpose (PLAN.md D15): every quality number in the evaluation
+# reports describes this exact model, and the guardrail's second layer (the
+# model refusing near-miss questions) depends on it. A "-latest" alias would
+# switch models silently. To upgrade: run the evaluation with
+# INSURANCE_RAG_GEN_MODEL set to the new model, compare the reports, then
+# change this default (README, "Upgrading the model").
+GEN_MODEL = os.environ.get("INSURANCE_RAG_GEN_MODEL", "gemini-3.8-flash")
+
+
+def is_moving_alias(model: str) -> bool:
+    """True for names like "gemini-flash-latest" whose model can change."""
+    return "latest" in (model or "").lower()
 GEMINI_BASE_URL = os.environ.get(
     "INSURANCE_RAG_BASE_URL",
     "https://generativelanguage.googleapis.com/v1beta/openai/",

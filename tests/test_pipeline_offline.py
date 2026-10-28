@@ -673,3 +673,23 @@ def test_eval_max_calls_budget_still_scores_cached_answers():
     assert calls == ["Is physio covered?"]  # in_01 cost the one allowed call
     assert stop.skipped_ids == ["in_02"] and stop.done == 2 and stop.calls == 1
     assert "--max-calls 1" in stop.reason
+
+
+# --- pinned generator model (PLAN.md D15) ------------------------------------------
+def test_default_generator_model_is_pinned():
+    import re
+
+    src = (REPO_ROOT / "src" / "rag_pipeline.py").read_text(encoding="utf-8")
+    default = re.search(r'"INSURANCE_RAG_GEN_MODEL", "([^"]+)"', src).group(1)
+    assert not rp.is_moving_alias(default), "pin the generator: no '-latest' alias"
+
+
+def test_cached_answers_expire_only_for_a_moving_alias():
+    assert rp.is_moving_alias("gemini-flash-latest") and not rp.is_moving_alias("gemini-3.8-flash")
+    assert ev.default_max_age_days("gemini-3.8-flash") is None
+    assert ev.default_max_age_days("gemini-flash-latest") == ev.DEFAULT_MAX_AGE_DAYS
+
+
+def test_health_reports_the_configured_model(api_client):
+    _, client = api_client
+    assert client.get("/health").json()["model_default"] == rp.GEN_MODEL

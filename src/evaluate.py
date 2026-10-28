@@ -28,9 +28,11 @@ question text, index path, model and threshold, so rewording a question or
 switching index/model re-runs that question instead of reusing a stale result.
 Scoring is re-applied to cached answers on every run, so editing an item's
 expected pages, keywords or evidence takes effect without new API calls.
-Because the default model is a moving alias ("gemini-flash-latest") and
-Gemini's OpenAI-compatible endpoint doesn't report the version behind it,
-cached results also expire after --max-age-days.
+The generator model is pinned (rag_pipeline.GEN_MODEL), so cached answers stay
+valid until something in the cache key changes. If you set a moving alias
+such as "gemini-flash-latest" (its model can change and the endpoint doesn't
+report which one served a request), cached answers expire after
+--max-age-days (default 14 for an alias).
 
 Run from the repo root (needs GEMINI_API_KEY):
     python -m src.evaluate                      # eval set v2 on the demo index
@@ -69,6 +71,12 @@ DEFAULT_QUESTIONS = V2_QUESTIONS
 DEFAULT_INDEX = REPO_ROOT / "app" / "demo_index"
 REPORTS_DIR = REPO_ROOT / "eval" / "reports"
 DEFAULT_MAX_AGE_DAYS = 14.0
+
+
+def default_max_age_days(model: str | None = None) -> float | None:
+    """Cache expiry for answers: 14 days for a moving alias, never for a
+    pinned model (its answers only change when the cache key does)."""
+    return DEFAULT_MAX_AGE_DAYS if rp.is_moving_alias(model or rp.GEN_MODEL) else None
 
 
 def results_path_for(questions_path: str | Path) -> Path:
@@ -491,8 +499,9 @@ def main(argv: list[str] | None = None) -> int:
                          "to the results file)")
     ap.add_argument("--no-report", action="store_true", help="only print the summary")
     ap.add_argument("--no-cache", action="store_true", help="ignore cached results")
-    ap.add_argument("--max-age-days", type=float, default=DEFAULT_MAX_AGE_DAYS,
-                    help="re-run cached results older than this (0 = never expire)")
+    ap.add_argument("--max-age-days", type=float, default=None,
+                    help="re-run cached results older than this (0 = never expire; "
+                         "default: never for a pinned model, 14 for a '-latest' alias)")
     ap.add_argument("--sleep", type=float, default=2.0, help="seconds between API calls")
     ap.add_argument("--max-calls", type=int, default=None,
                     help="stop after this many generation calls (cached answers are free); "
@@ -514,9 +523,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    if "latest" in rp.GEN_MODEL:
+    max_age_days = (default_max_age_days() if args.max_age_days is None
+                    else (args.max_age_days or None))
+    if rp.is_moving_alias(rp.GEN_MODEL):
         print(f"note: '{rp.GEN_MODEL}' is a moving alias and the API doesn't report which "
-              f"version served it, so cached results expire after {args.max_age_days:g} "
+              f"version served it, so cached results expire after {max_age_days or 0:g} "
               "days. Pin INSURANCE_RAG_GEN_MODEL to a specific version for reproducible runs.")
 
     if args.pdf:
@@ -556,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
             cache=cache,
             save_cache=_save,
             sleep_between=args.sleep,
-            max_age_days=args.max_age_days or None,
+            max_age_days=max_age_days,
             chunk_texts=chunk_texts,
             max_calls=args.max_calls,
         )
