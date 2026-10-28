@@ -9,23 +9,24 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-10-28 (M1c merged as PR #25; generator pinned on branch `pin-generator-model`)
+Last updated: 2026-10-28 (generator pinned, PR #26 merged; paused, see "Where we are")
 
 ---
 
 ## Where we are (read this first when resuming)
 
 - **Status (2026-10-28):** M0 (PR #21), M1a (PR #22), M1b (PR #23), the
-  quota fail-fast fix (PR #24) and M1c (PR #25, LLM judge) are merged.
-  Pinning the generator model (D15) is implemented on branch
-  `pin-generator-model`; owner to run `make test lint`, PR, merge.
+  quota fail-fast fix (PR #24), M1c (PR #25, LLM judge) and the pinned
+  generator model (PR #26, D15) are merged. The owner paused the work here;
+  nothing is in progress on the agent side.
 - **Owner's data collection (as quota allows):** confirm on
   aistudio.google.com/rate-limit that the judge model (`gemini-3.6-flash`,
   override with `INSURANCE_RAG_JUDGE_MODEL`) has a free daily limit; then
   daily `make eval` and `make judge` until all items are covered,
   `make judge-sheet`, hand-score the CSV, a final `make eval` for the
-  report. After the pinning PR, the 9 answers cached under
-  `gemini-flash-latest` are asked again once (model name is in the cache key).
+  report. Since the pinning PR, the 9 answers cached under
+  `gemini-flash-latest` are asked again once (model name is in the cache
+  key). Paste the final summary/report when done; that starts M1d.
 - **First v2 run in progress, spread over ~3 days** (owner's choice, D13):
   the Gemini free tier allows only **20 generation requests per day** for
   the model behind `gemini-flash-latest` (`gemini-3.8-flash` on
@@ -38,8 +39,11 @@ Last updated: 2026-10-28 (M1c merged as PR #25; generator pinned on branch `pin-
   1. Review the full v2 report, with judge scores and judge-human
      agreement, once the daily `make eval` / `make judge` runs cover all
      items (answers: 9/65 on 2026-10-28). This is M1d.
-  2. Then M2 (CI: smoke eval on PRs, budgeted with `--max-calls`, plus the
-     weekly model check from D15). Propose the plan first.
+  2. **When the owner is back: propose the M2 plan** (CI smoke eval on PRs,
+     budgeted with `--max-calls`; manual full eval; weekly model check from
+     D15). M2 needs a `GEMINI_API_KEY` repo secret, ideally from a separate
+     Google Cloud project so CI and evals don't use the live demo's quota.
+     This can proceed before M1d's data is complete.
 - **Check:** whether the live Streamlit app uses the same Gemini key as the
   evaluation. If so, an eval run can exhaust the demo's daily quota; give
   evaluations their own key/project.
@@ -520,3 +524,6 @@ sections. 2–3 resume bullets, describing only what was built.
   configured model; README "Upgrading the model"; notebook 04; 3 offline
   tests. Weekly model check added to the M2 scope. Agent ran lint only;
   delivered as a `git am` mailbox.
+- **2026-10-28 — PR #26 (merged).** Generator pinned to `gemini-3.8-flash`
+  (D15). **Paused.** Next: owner's daily `make eval` / `make judge` runs
+  (M1d data) and, when back, the M2 plan.
