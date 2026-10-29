@@ -9,7 +9,7 @@
 PYTHON ?= python
 
 .DEFAULT_GOAL := help
-.PHONY: help setup test lint eval eval-v1 judge judge-sheet eval-set run-app run-api restore-index clean
+.PHONY: help setup test lint eval eval-v1 smoke judge judge-sheet model-check eval-set run-app run-api restore-index clean
 
 help: ## Show targets and the command each one runs
 	@echo "Targets (plain command in brackets):"
@@ -18,6 +18,8 @@ help: ## Show targets and the command each one runs
 	@echo "  lint           lint the code                       [python -m ruff check .]"
 	@echo "  eval           eval set v2 + report (GEMINI_API_KEY) [python -m src.evaluate]"
 	@echo "  eval-v1        the older v1 eval set (GEMINI_API_KEY) [python -m src.evaluate --questions notebooks/eval/eval_questions.json]"
+	@echo "  smoke          CI smoke eval + gates (GEMINI_API_KEY) [python -m src.evaluate --subset eval/smoke_v2.txt --gates]"
+	@echo "  model-check    pinned models still available? newer? [python -m src.model_check]"
 	@echo "  judge          LLM-judge cached answers (GEMINI_API_KEY) [python -m src.judge]"
 	@echo "  judge-sheet    human scoring sheet for the judge     [python -m src.judge --sheet]"
 	@echo "  eval-set       validate eval set, rebuild review    [python -m src.eval_set]"
@@ -42,6 +44,13 @@ eval:
 
 eval-v1:
 	$(PYTHON) -m src.evaluate --questions notebooks/eval/eval_questions.json $(ARGS)
+
+# The 12-question CI smoke eval with its gates (exit 1 if a gate fails).
+smoke:
+	$(PYTHON) -m src.evaluate --subset eval/smoke_v2.txt --gates $(ARGS)
+
+model-check:
+	$(PYTHON) -m src.model_check $(ARGS)
 
 # Judge cached answers with the pinned judge model (resumable, budgeted with
 # ARGS="--max-calls N"); then `make eval` puts the scores in the report.

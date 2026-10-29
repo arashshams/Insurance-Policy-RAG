@@ -1,0 +1,71 @@
+name: model-check
+
+# Weekly: is the pinned generator/judge model still available, and is there a
+# newer Flash model? Opens (or updates) one GitHub issue labelled model-check
+# when there is something to do; silent otherwise. Lists models only: no
+# generation quota is used. See src/model_check.py and PLAN.md D15.
+on:
+  schedule:
+    - cron: "23 14 * * 1"   # Mondays 14:23 UTC
+  workflow_dispatch:
+    inputs:
+      gen_model:
+        description: "Pretend the generator is this model (e.g. a fake name, to test the alert)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Check models
+        id: check
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEN_MODEL_OVERRIDE: ${{ inputs.gen_model }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::notice::No GEMINI_API_KEY secret: model check skipped."
+            exit 0
+          fi
+          if [ -n "$GEN_MODEL_OVERRIDE" ]; then export INSURANCE_RAG_GEN_MODEL="$GEN_MODEL_OVERRIDE"; fi
+          python -m src.model_check --out "$RUNNER_TEMP/model_check.md"
+          cat "$RUNNER_TEMP/model_check.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Open or update the model-check issue
+        if: steps.check.outputs.action_needed == 'true' || steps.check.outputs.upgrade_available == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTION_NEEDED: ${{ steps.check.outputs.action_needed }}
+        run: |
+          body="$RUNNER_TEMP/model_check.md"
+          if [ "$ACTION_NEEDED" = "true" ]; then
+            title="Gemini model check: action needed"
+          else
+            title="Gemini model check: newer model available"
+          fi
+          gh label create model-check --color FBCA04 \
+            --description "Weekly Gemini model check" --force
+          num=$(gh issue list --label model-check --state open --json number --jq '.[0].number // empty')
+          if [ -z "$num" ]; then
+            gh issue create --title "$title" --label model-check --body-file "$body"
+          else
+            last=$(gh issue view "$num" --json body,comments \
+              --jq 'if (.comments | length) > 0 then .comments[-1].body else .body end')
+            if [ "$last" != "$(cat "$body")" ]; then
+              gh issue edit "$num" --title "$title"
+              gh issue comment "$num" --body-file "$body"
+            else
+              echo "Issue #$num already says this; nothing new to post."
+            fi
+          fi

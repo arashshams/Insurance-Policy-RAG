@@ -593,6 +593,24 @@ RAG_USER_TEMPLATE = """
 </Question>
 """
 
+
+def pipeline_fingerprint() -> str:
+    """Short hash of every setting that shapes an answer besides the question,
+    index, models, threshold and k (those are in the evaluation's cache key):
+    the prompts, generation budget, reasoning setting, chunking and the IDK
+    string. The evaluation re-asks a cached question when this changes, so
+    editing the prompt can't silently reuse answers from the old prompt."""
+    import hashlib
+    import json
+
+    parts = {
+        "system": RAG_SYSTEM_MESSAGE, "user": RAG_USER_TEMPLATE,
+        "max_tokens": GEN_MAX_TOKENS, "reasoning": GEN_REASONING_EFFORT,
+        "chunk_size": CHUNK_SIZE, "chunk_overlap": CHUNK_OVERLAP,
+        "encoding": ENCODING_NAME, "scramble": SCRAMBLE_THRESHOLD, "idk": IDK_ANSWER,
+    }
+    return hashlib.sha256(json.dumps(parts, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+
 # Matches one citation group: [doc_3], [doc_3, doc_7] or the (doc_3) variant
 _CITATION_RE = _re.compile(r"[\[(]\s*(doc_\d+(?:\s*,\s*doc_\d+)*)\s*[\])]")
 

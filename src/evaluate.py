@@ -48,6 +48,7 @@ import argparse
 import datetime as _dt
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -139,7 +140,8 @@ def _is_fresh(rec: dict, max_age_s: float | None, now: float) -> bool:
     return isinstance(ts, (int, float)) and now - ts <= max_age_s
 
 
-def _record_from_result(q: dict, res: dict, index_label: str, now: float) -> dict:
+def _record_from_result(q: dict, res: dict, index_label: str, now: float,
+                        pipeline_fp: str | None = None) -> dict:
     """What gets cached for one question: the pipeline's output, no scoring and
     no chunk text (so a private policy's cache holds only answers and ids)."""
     retrieved = res.get("retrieved") or []
@@ -169,6 +171,7 @@ def _record_from_result(q: dict, res: dict, index_label: str, now: float) -> dic
         "citations_verified": res.get("citations_verified"),
         "finish_reason": res.get("finish_reason"),
         "generation_calls": _generation_calls(res),
+        "pipeline": pipeline_fp,
         "index": index_label, "model": rp.GEN_MODEL,
         "model_resolved": res.get("model_resolved"),
         "evaluated_at": now,
@@ -256,14 +259,22 @@ def run_eval(
     records: list[dict] = []
     items = es.items_of(qset)
     calls = new = 0
+    pipeline_fp = rp.pipeline_fingerprint()
     stop_reason: str | None = None
     retry_after_s: float | None = None
     skipped: list[str] = []
 
     for q in items:
         key = _cache_key(q, index_label)
-        if key in cache and _is_fresh(cache[key], max_age_s, clock()):
+        if (key in cache and _is_fresh(cache[key], max_age_s, clock())
+                and cache[key].get("pipeline") in (None, pipeline_fp)):
             rec = cache[key]
+            if rec.get("pipeline") is None:
+                # Cached before answers carried a pipeline fingerprint (PLAN.md
+                # D16): those were made with today's pipeline, so adopt it once.
+                rec["pipeline"] = pipeline_fp
+                if save_cache:
+                    save_cache(cache)
         else:
             if stop_reason is None and max_calls is not None and calls >= max_calls:
                 stop_reason = f"reached --max-calls {max_calls}."
@@ -278,7 +289,7 @@ def run_eval(
                 log(f"STOP {q['id']}: {exc}")
                 continue
             res = _normalize_result(out, idk)
-            rec = _record_from_result(q, res, index_label, clock())
+            rec = _record_from_result(q, res, index_label, clock(), pipeline_fp)
             calls += rec["generation_calls"]
             new += 1
             cache[key] = rec
@@ -467,6 +478,43 @@ def format_summary(s: dict, index_label: str) -> str:
     return "\n".join(lines)
 
 
+# --- CI gates ------------------------------------------------------------------
+def check_gates(summary: dict, max_failures: int = 1) -> list[dict]:
+    """Pass/fail gates for the CI smoke eval (PLAN.md M2):
+      * guardrail: no question that should get "I don't know" is answered
+      * no answerable (answer/defer) question gets "I don't know"
+      * at most `max_failures` items fail for any reason (e.g. a citation
+        without the evidence), which tolerates one off answer."""
+    a = summary["abstention"]
+    failed = [f["id"] for f in summary.get("failures") or []]
+    return [
+        {"gate": "Guardrail: no out-of-scope question is answered",
+         "ok": a["fn"] == 0,
+         "detail": f"answered: {', '.join(a['fn_ids'])}" if a["fn"] else "none answered"},
+        {"gate": "No answerable question gets \"I don't know\"",
+         "ok": a["fp"] == 0,
+         "detail": f"abstained: {', '.join(a['fp_ids'])}" if a["fp"] else "none"},
+        {"gate": f"At most {max_failures} failed item(s)",
+         "ok": len(failed) <= max_failures,
+         "detail": f"{len(failed)} failed" + (f": {', '.join(failed)}" if failed else "")},
+    ]
+
+
+def format_gates(gates: list[dict]) -> str:
+    rows = ["| Gate | Result | Detail |", "|---|---|---|"]
+    rows += [f"| {g['gate']} | {'pass' if g['ok'] else '**FAIL**'} | {g['detail']} |"
+             for g in gates]
+    return "\n".join(rows)
+
+
+def _write_step_summary(text: str) -> None:
+    """Append markdown to the GitHub Actions job summary, when running there."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if path:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(text + "\n")
+
+
 def _git_commit() -> str | None:
     """Short commit of the code that ran, with a marker if src/ has local edits."""
     try:
@@ -506,6 +554,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-calls", type=int, default=None,
                     help="stop after this many generation calls (cached answers are free); "
                          "run again later to continue. Useful on the free tier's daily limit")
+    ap.add_argument("--subset", default=None,
+                    help="file of item ids to run (one per line), e.g. eval/smoke_v2.txt")
+    ap.add_argument("--gates", action="store_true",
+                    help="check the CI gates and exit 1 if one fails (see check_gates)")
+    ap.add_argument("--max-failures", type=int, default=1,
+                    help="with --gates: failed items allowed (default 1)")
     args = ap.parse_args(argv)
 
     questions_path = Path(args.questions)
@@ -516,6 +570,14 @@ def main(argv: list[str] | None = None) -> int:
             print("error: the eval set is invalid (fix it, then run python -m src.eval_set):\n  "
                   + "\n  ".join(problems), file=sys.stderr)
             return 2
+    subset_label = None
+    if args.subset:
+        try:
+            qset = es.filter_set(qset, es.load_subset(args.subset))
+        except (OSError, ValueError) as exc:
+            print(f"error: --subset {args.subset}: {exc}", file=sys.stderr)
+            return 2
+        subset_label = Path(args.subset).stem
 
     try:
         rp._read_api_key()  # fail fast, before opening anything
@@ -545,7 +607,7 @@ def main(argv: list[str] | None = None) -> int:
     n_chunks = collection.count()
     print(f"Index: {index_label} ({n_chunks} chunks)")
     print(f"Eval set: {questions_path} ({es.set_version(qset)}, "
-          f"{len(es.items_of(qset))} items)")
+          f"{len(es.items_of(qset))} items{', subset ' + subset_label if subset_label else ''})")
     # Chunk text, for checking cited passages against evidence phrases. Held in
     # memory for scoring only; never written to the cache or the report.
     chunk_texts = {c["id"]: c["text"] for c in es.chunks_from_collection(collection)}
@@ -574,6 +636,8 @@ def main(argv: list[str] | None = None) -> int:
     except EvalIncomplete as stop:
         print()
         print(stop.message())
+        _write_step_summary(f"**Evaluation stopped early:** {stop.reason} "
+                            f"({stop.done}/{stop.total} answered). Not counted as a failure.")
         return 3
     except rp.GeminiUnavailableError as exc:  # transient errors outlasted the retries
         print(f"\nStopped: {exc}\nAnswers so far are cached; run `make eval` again to "
@@ -582,10 +646,25 @@ def main(argv: list[str] | None = None) -> int:
     add_judge_results(summary, records, qset, questions_path)
     print()
     print(format_summary(summary, index_label))
+    gates = check_gates(summary, args.max_failures) if args.gates else []
+    if gates:
+        print("\n" + format_gates(gates))
+    o, a = summary["overall"], summary["abstention"]
+    _write_step_summary("\n".join([
+        f"### Evaluation: {es.set_version(qset)}"
+        + (f" ({subset_label}, {len(records)} items)" if subset_label else ""),
+        "",
+        f"Model `{rp.GEN_MODEL}`, pipeline `{rp.pipeline_fingerprint()}`. "
+        f"Passed **{o['n_pass']}/{o['n']}**; abstention precision/recall "
+        f"{er.pct(a['precision'])}/{er.pct(a['recall'])}; evidence hit "
+        f"{er.pct(o['evidence_hit'])}.",
+        "",
+        format_gates(gates) if gates else "",
+    ]))
 
     if not args.no_report:
         today = _dt.date.today().isoformat()
-        version = es.set_version(qset)
+        version = es.set_version(qset) + (f"_{subset_label}" if subset_label else "")
         if args.report:
             report_path = Path(args.report)
         elif args.pdf:
@@ -608,11 +687,15 @@ def main(argv: list[str] | None = None) -> int:
             "chunk_overlap": rp.CHUNK_OVERLAP,
             "encoding": rp.ENCODING_NAME,
             "git_commit": _git_commit(),
+            "pipeline": rp.pipeline_fingerprint(),
         }
         md_path, json_path = er.write_report(report_path, summary, records, meta)
         print(f"\nReport: {md_path}\nMetrics: {json_path}")
         if args.pdf:
             print("note: this report quotes answers about your PDF; keep it out of the repo.")
+    if any(not g["ok"] for g in gates):
+        print("\nA gate failed.", file=sys.stderr)
+        return 1
     return 0
 
 
