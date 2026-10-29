@@ -1,0 +1,80 @@
+name: smoke-eval
+
+# Runs 12 eval-set questions against the real pipeline (eval/smoke_v2.txt) on
+# PRs that change the pipeline, the eval set or the index, and checks the gates
+# in src/evaluate.py (check_gates). Answers are always fresh (no cache), so the
+# check measures the PR's code. Costs at most ~12 Gemini generation calls.
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "eval/**"
+      # ...but not files that can't change the answers (reports, review and
+      # human-scoring sheets, the judge prompt: CI runs no judge)
+      - "!eval/reports/**"
+      - "!eval/*.md"
+      - "!eval/*_human_scores.csv"
+      - "!eval/prompts/**"
+      - "app/demo_index/**"
+      - "requirements.txt"
+      - ".github/workflows/smoke-eval.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: smoke-eval-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  key:
+    # Secrets are not available to PRs from forks: skip instead of failing.
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    steps:
+      - id: check
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -n "$GEMINI_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No GEMINI_API_KEY secret (e.g. a PR from a fork): smoke eval skipped."
+          fi
+
+  smoke:
+    needs: key
+    if: needs.key.outputs.present == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Smoke eval with gates
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set +e
+          python -m src.evaluate --subset eval/smoke_v2.txt --gates \
+            --max-calls 15 --sleep 6 \
+            --results "$RUNNER_TEMP/smoke_results.json" \
+            --report "$RUNNER_TEMP/smoke_report.md"
+          code=$?
+          if [ "$code" -eq 3 ]; then
+            echo "::warning::Smoke eval stopped early (Gemini's daily quota or the call budget). Not counted as a failure; re-run the job later."
+            exit 0
+          fi
+          exit "$code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-eval-report
+          path: ${{ runner.temp }}/smoke_report.*
+          if-no-files-found: ignore

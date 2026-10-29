@@ -2,6 +2,8 @@
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/arashshams/Insurance-Policy-RAG/blob/master/notebooks/03_insurance_policy_rag.ipynb)
 [![Try it live](https://img.shields.io/badge/Try%20it%20live-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://insurance-policy-rag.streamlit.app/)
+[![tests](https://github.com/arashshams/Insurance-Policy-RAG/actions/workflows/tests.yml/badge.svg)](https://github.com/arashshams/Insurance-Policy-RAG/actions/workflows/tests.yml)
+[![smoke-eval](https://github.com/arashshams/Insurance-Policy-RAG/actions/workflows/smoke-eval.yml/badge.svg)](https://github.com/arashshams/Insurance-Policy-RAG/actions/workflows/smoke-eval.yml)
 
 **A Retrieval-Augmented Generation (RAG) assistant that answers natural-language questions about a single insurance policy PDF — grounded in the document, cited by page, and honest enough to say "I don't know."**
 
@@ -114,6 +116,9 @@ eval/
   prompts/judge_v1.md               # versioned judge prompt and rubric
 tests/                              # offline tests (no API key needed)
 .github/workflows/tests.yml         # CI: lint + offline tests
+.github/workflows/smoke-eval.yml    # CI: 12-question eval with pass gates on relevant PRs
+.github/workflows/full-eval.yml     # manual full evaluation (+ judge), resumable
+.github/workflows/model-check.yml    # weekly: pinned models still available? newer ones?
 .streamlit/config.toml              # Streamlit server settings (upload size cap)
 data/
   documents/                        # local policy PDF (NOT committed — privacy)
@@ -210,6 +215,18 @@ make eval-v1     # python -m src.evaluate --questions notebooks/eval/eval_questi
 Answers are cached (`eval/questions_v2_results.json`; `notebooks/eval/eval_results.json` for v1; both git-ignored), so a re-run only re-scores. A full v2 run costs 65 embedding calls and at most 65 generation calls (questions stopped by the threshold skip generation). The Gemini free tier currently allows only about 20 generation requests per day per project, so a full run can take a few days: when the daily quota runs out, the harness stops at once with a message saying how many questions are done, and the next `make eval` continues from the cache. To leave quota for the live demo, cap a run with `make eval ARGS="--max-calls 10"`.
 
 Evaluation runs are sequential and paced to stay within free-tier limits, and no real policy facts are committed.
+
+### Continuous integration
+
+Every push and PR runs lint and the offline test suite (no API key: embeddings and generation are faked). On top of that, quality is checked against the real model:
+
+- **Smoke eval on PRs** (`smoke-eval.yml`): when a PR changes the pipeline, the eval set, the index or the requirements, 12 questions from eval set v2 (`eval/smoke_v2.txt`, every category, chosen at the edges of the guardrail) run with fresh answers, and the PR fails if a gate fails: an out-of-scope question gets answered, an answerable one gets "I don't know", or more than one item fails. It costs at most about 12 generation calls; it is skipped, not failed, when the API key isn't available (PRs from forks) or the daily quota is used up. Run it locally with `make smoke`.
+- **Full eval on demand** (`full-eval.yml`, Actions tab -> Run workflow): answers and optionally judges the full set within a call budget; caches persist between runs, so it can finish over several days. The report is uploaded as an artifact.
+- **Weekly model check** (`model-check.yml`): lists the Gemini models the key can use and opens a GitHub issue if the pinned generator or judge model has disappeared, or a newer Flash version is available (`make model-check` runs it locally).
+
+Cached answers record a fingerprint of the prompts and generation settings (`pipeline_fingerprint()`), so changing the prompt re-asks the questions instead of reusing old answers.
+
+To enable the model-based checks, add a Gemini API key as the repository secret `GEMINI_API_KEY` (Settings -> Secrets and variables -> Actions). Ideally use a separate Google Cloud project, because free-tier limits are per project and the live demo uses the same quota otherwise.
 
 ### Upgrading the model
 

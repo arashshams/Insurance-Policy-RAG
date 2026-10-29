@@ -144,6 +144,8 @@ def render_markdown(summary: dict, records: list[dict], meta: dict) -> str:
         f"| Chunking | {meta['chunk_size']} tokens, overlap {meta['chunk_overlap']}, "
         f"`{meta['encoding']}` |",
         f"| Code | {_cell(meta.get('git_commit') or 'unknown')} |",
+        f"| Pipeline fingerprint | `{meta.get('pipeline') or 'n/a'}` (prompts, generation and "
+        "chunking settings) |",
         "",
         "## Headline",
         "",

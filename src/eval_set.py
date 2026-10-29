@@ -53,6 +53,33 @@ def set_version(data: dict) -> str:
     return v if v.startswith("v") else f"v{v}"
 
 
+def load_subset(path: str | Path) -> list[str]:
+    """Item ids from a subset file: one id per line; blank lines and
+    '#' comments are ignored (e.g. eval/smoke_v2.txt)."""
+    ids = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            ids.append(line)
+    return ids
+
+
+def filter_set(data: dict, ids: list[str]) -> dict:
+    """A copy of an eval set (v1 or v2) keeping only `ids`, in the set's own
+    order. Raises ValueError on unknown or duplicate ids, so a typo in a
+    subset file can't silently shrink a CI check."""
+    known = [i["id"] for i in items_of(data)]
+    unknown = [i for i in ids if i not in known]
+    dupes = sorted({i for i in ids if ids.count(i) > 1})
+    if unknown or dupes:
+        raise ValueError(f"subset problems: unknown ids {unknown}, duplicate ids {dupes}")
+    keep = set(ids)
+    if is_v1(data):
+        return {**data, **{k: [q for q in data.get(k) or [] if q["id"] in keep]
+                           for k in ("in_scope", "out_of_scope")}}
+    return {**data, "items": [i for i in data["items"] if i["id"] in keep]}
+
+
 def items_of(data: dict) -> list[dict]:
     """The questions of any eval set as v2-shaped items, so the harness has ONE
     scoring path. v1 in-scope questions become behavior "answer" and

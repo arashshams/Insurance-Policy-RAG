@@ -9,16 +9,24 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-10-28 (generator pinned, PR #26 merged; paused, see "Where we are")
+Last updated: 2026-10-29 (M2 implemented on branch `m2-ci`; see "Where we are")
 
 ---
 
 ## Where we are (read this first when resuming)
 
-- **Status (2026-10-28):** M0 (PR #21), M1a (PR #22), M1b (PR #23), the
+- **Status (2026-10-29):** M0 (PR #21), M1a (PR #22), M1b (PR #23), the
   quota fail-fast fix (PR #24), M1c (PR #25, LLM judge) and the pinned
-  generator model (PR #26, D15) are merged. The owner paused the work here;
-  nothing is in progress on the agent side.
+  generator model (PR #26, D15) are merged. **M2 (CI) is implemented on
+  branch `m2-ci`** (plan approved with the recommended options, D16–D17).
+- **Owner to do for M2:** `make test lint`, PR, merge. Then: create a Gemini
+  API key, ideally in a separate Google Cloud project (so CI and evals don't
+  share the live demo's 20/day quota), add it as repository secret
+  `GEMINI_API_KEY` (Settings -> Secrets and variables -> Actions), check
+  Settings -> Actions -> General -> Workflow permissions allow the
+  `issues: write` the model check asks for, and test the model check once
+  (Actions -> model-check -> Run workflow, `gen_model` = a fake name: it
+  should open an issue; close it afterwards).
 - **Owner's data collection (as quota allows):** confirm on
   aistudio.google.com/rate-limit that the judge model (`gemini-3.6-flash`,
   override with `INSURANCE_RAG_JUDGE_MODEL`) has a free daily limit; then
@@ -27,23 +35,17 @@ Last updated: 2026-10-28 (generator pinned, PR #26 merged; paused, see "Where we
   report. Since the pinning PR, the 9 answers cached under
   `gemini-flash-latest` are asked again once (model name is in the cache
   key). Paste the final summary/report when done; that starts M1d.
-- **First v2 run in progress, spread over ~3 days** (owner's choice, D13):
-  the Gemini free tier allows only **20 generation requests per day** for
-  the model behind `gemini-flash-latest` (`gemini-3.8-flash` on
-  2026-10-27). Day 1 stopped on the daily quota after 8/65 items (all 8
-  passed; cached in `eval/questions_v2_results.json`). The owner runs
-  `make eval` once a day; each run resumes from the cache. Then
-  `make restore-index`. When all 65 are done, the owner pastes the summary
-  and the report (`eval/reports/v2.0_<date>.md`).
+- **Free-tier budget:** 20 generation requests per day per project and
+  model (D13). Full v2 answers need ~60, the judge up to ~47 on its own
+  model's quota; the CI smoke eval up to ~12 per relevant PR. Runs resume
+  from the cache, so spreading them over days is fine.
 - **Next items (propose plans first):**
   1. Review the full v2 report, with judge scores and judge-human
      agreement, once the daily `make eval` / `make judge` runs cover all
      items (answers: 9/65 on 2026-10-28). This is M1d.
-  2. **When the owner is back: propose the M2 plan** (CI smoke eval on PRs,
-     budgeted with `--max-calls`; manual full eval; weekly model check from
-     D15). M2 needs a `GEMINI_API_KEY` repo secret, ideally from a separate
-     Google Cloud project so CI and evals don't use the live demo's quota.
-     This can proceed before M1d's data is complete.
+  2. After M2 is merged and the secret is set: M3 (MLflow tracking +
+     threshold/k sweep, D5, D6) or M4 (Docker + cloud deployment, D3).
+     Propose the plan first; neither needs M1d's data to start.
 - **Check:** whether the live Streamlit app uses the same Gemini key as the
   evaluation. If so, an eval run can exhaust the demo's daily quota; give
   evaluations their own key/project.
@@ -171,6 +173,9 @@ with exponential backoff (`_call_with_backoff`); when retries run out,
 | `src/eval_set.py` | Load/validate eval sets, check evidence against an index, render review tables. |
 | `tests/` | 42 offline tests (pipeline, guardrails, eval harness, API). |
 | `.github/workflows/tests.yml` | CI: `ruff check` + `pytest` on push to `master`/`new_dev` and on PRs (Python 3.11). |
+| `.github/workflows/smoke-eval.yml` | CI (M2): 12-question smoke eval (`eval/smoke_v2.txt`) with gates on PRs that touch `src/`, `eval/`, the index or requirements; fresh answers; skips without the secret or on quota. |
+| `.github/workflows/full-eval.yml` | Manual full eval (+ optional judge); answer/judge caches persist in the GitHub cache; report as artifact. |
+| `.github/workflows/model-check.yml`, `src/model_check.py` | Weekly: pinned generator/judge models still listed? newer Flash? Opens/updates one `model-check` issue. |
 | `Makefile`, `requirements-dev.txt`, `ruff.toml` | Dev tasks (`make help`), pinned test/lint tools, lint config. |
 | `.streamlit/config.toml` | Upload size cap. |
 
@@ -225,6 +230,8 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | D2 | Raw eval cache `notebooks/eval/eval_results.json` stays git-ignored; commit a **versioned summary per run** instead (`eval/reports/<set-version>_<date>.md` + small metrics JSON). | Satisfies rule 5 without churning a large cache file. | Decided (owner, 2026-10-26) |
 | D3 | **M4 option (a):** upload mode keeps running inside the Streamlit process; the deployed API serves the bundled demo policy. | Cloud hosts may run several instances and stop idle ones, so per-session in-memory indexes on the API would vanish or hit the wrong instance. Alternatives: (b) single-instance API with expiring upload session IDs, (c) re-embed per request (private but costly). | Decided (owner, 2026-10-26) |
 | D4 | LLM judge uses a **pinned** model version, different from the generator: default `gemini-3.6-flash` (`INSURANCE_RAG_JUDGE_MODEL`). | `-latest` aliases make judge scores drift; a different model reduces self-grading bias; on the free tier each model has its own daily quota, so judging doesn't use the generator's. Still a Gemini judge of Gemini answers: agreement with the owner's hand scores is reported. A judge from another provider is a possible later upgrade. | Decided (owner, 2026-10-28) |
+| D16 | **Pipeline fingerprint in cached answers:** each answer records a hash of the prompts, generation budget, reasoning setting, chunking and IDK string (`rag_pipeline.pipeline_fingerprint()`); a cached answer is reused only if it matches. Answers cached before this change (no fingerprint) adopt the current one once. | The cache key covered question/index/model/threshold/k but not the prompt, so editing the prompt silently reused old answers in reports and would hide regressions in CI. Adoption keeps the owner's in-progress v2 run (nothing changed since those answers). | Decided (owner, 2026-10-29) |
+| D17 | **CI evaluation design:** smoke eval of 12 items (`eval/smoke_v2.txt`, every category, edge cases of the guardrail) runs automatically on PRs touching `src/`, `eval/`, `app/demo_index/` or `requirements.txt`, always with fresh answers and `--max-calls 15`; gates: no abstain item answered, no answerable item abstained, at most 1 failed item; no judge in CI. Skips (not fails) without the secret (forks) or on a quota stop. Full eval is manual only, resumable through the GitHub cache. Model check weekly. | Catches regressions where the PR changes behaviour while keeping quota use small; strict on the guardrail, tolerant of one off answer; quota or forks never block a PR. A scheduled full eval would only re-measure the pinned, unchanged system. | Decided (owner, 2026-10-29) |
 | D15 | **Pin the generator model** (`gemini-3.8-flash`) instead of the `gemini-flash-latest` alias. Cached answers no longer expire for a pinned model (14 days only for an alias). Upgrades are deliberate: evaluate the new model via `INSURANCE_RAG_GEN_MODEL`, compare reports, then change the default (README "Upgrading the model"). A weekly CI job (M2) lists the models the key can use and opens an issue when the pinned model disappears or a newer Flash appears. | Every reported number describes one model; the guardrail's model-refusal layer depends on the generator's behaviour, so a silent switch could change it unmeasured; an alias also forced re-asking all answers every 14 days, wiping judge and human scores. Cost: the app breaks if the pinned model is retired before it is bumped, hence the weekly check. | Decided (owner, 2026-10-28) |
 | D14 | Judge design: one call per item scores **faithfulness** (vs the retrieved passages) and **correctness** (vs the reference answer) on a **0–2** scale; only answered answer/defer items with the right behaviour are judged; prompt is a versioned file whose name + hash are in the cache key; **separate `make judge` step** with its own cache; "strict pass" = judge-free pass + both scores 2; human check on ~20 stratified items with exact / within-one / quadratic-weighted kappa, counted only for the answer the human scored (answer hash). | Few levels give steadier judge scores and an easier human sheet; separate steps keep the generator's and judge's quotas and caches independent; hashes make every score traceable and stale human scores visible. | Decided (owner, 2026-10-28) |
 | D5 | MLflow **wraps the existing harness** (logs its config + metrics) instead of a second eval path. | Rule 4 / single source of metrics. | Proposed (part of M3 plan) |
@@ -352,19 +359,25 @@ commits: the feature and a log-wording fix for an existing test).
 Acceptance: one command produces the full report; every number in the
 README traces to a committed report.
 
-### M2. Tests and CI — `[ ]`
+### M2. Tests and CI — `[~]` (implemented on branch `m2-ci`; owner to merge and add the secret)
 
-Mostly done already (42 offline tests; CI on push/PR). Remaining:
-- Unit tests for any new M1 code (metrics, judge parsing) — offline.
-- Smoke eval on PRs: 10–15 questions from v2 incl. all out-of-scope
-  categories, with gates (e.g. out-of-scope abstention must stay 100%,
-  in-scope answered >= threshold). Needs repo secret `GEMINI_API_KEY`
-  (owner adds it). Skip gracefully when the secret is unavailable
-  (e.g. PRs from forks).
-- Full eval: manual (`workflow_dispatch`) and/or weekly schedule.
-- Weekly model check (D15): list the models the API key can use (no
-  generation quota); open/update a GitHub issue when the pinned generator
-  or judge model is no longer listed, or a newer Flash model appears.
+- [x] Unit tests for the M1 code (metrics, judge parsing) — offline (M1b/M1c).
+- [x] Pipeline fingerprint in cached answers (D16).
+- [x] `--subset` (`eval/smoke_v2.txt`, 12 items) and `--gates`
+  (`--max-failures`, default 1); gate table in the console and in the
+  GitHub job summary; `make smoke`.
+- [x] `smoke-eval.yml` on relevant PRs (D17): fresh answers,
+  `--max-calls 15`, `--sleep 6`; skips without the secret or on a quota
+  stop; report as artifact; newer pushes cancel older runs.
+- [x] `full-eval.yml`: manual, inputs `max_calls`, `judge`,
+  `judge_max_calls`; caches persist between runs; report as artifact.
+- [x] Weekly model check (D15): `src/model_check.py` + `model-check.yml`;
+  lists models with the key in a header; opens/updates one `model-check`
+  issue when a pinned model is missing or a newer `gemini-<v>-flash`
+  appears; `gen_model` input to test the alert; `make model-check`.
+- [x] Offline tests (14), README CI section, Makefile.
+- [ ] Owner: merge; add the `GEMINI_API_KEY` secret (separate project
+  recommended); check workflow permissions; test the model check once.
 
 ### M3. Experiment tracking with MLflow — `[ ]`
 
@@ -527,3 +540,12 @@ sections. 2–3 resume bullets, describing only what was built.
 - **2026-10-28 — PR #26 (merged).** Generator pinned to `gemini-3.8-flash`
   (D15). **Paused.** Next: owner's daily `make eval` / `make judge` runs
   (M1d data) and, when back, the M2 plan.
+- **2026-10-29 — branch `m2-ci`.** Owner approved the M2 plan with the
+  recommended options (automatic smoke eval on relevant PRs; gates: guardrail
+  100%, no wrongful abstention, at most 1 failure; adopt answers cached
+  before fingerprinting). Found and fixed (D16): the answer cache ignored
+  the prompt, so prompt edits reused old answers. Added `--subset`,
+  `--gates`, job summaries, `eval/smoke_v2.txt`, three workflows
+  (`smoke-eval`, `full-eval`, `model-check`), `src/model_check.py`,
+  `make smoke` / `make model-check`, 14 offline tests, README CI section.
+  Agent ran lint and YAML checks only; delivered as a `git am` mailbox.
