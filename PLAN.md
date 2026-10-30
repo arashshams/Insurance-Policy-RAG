@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-10-29 (M2 implemented on branch `m2-ci`; see "Where we are")
+Last updated: 2026-10-29 (M2 merged as PR #27 and set up; paused before M3/M4, see "Where we are")
 
 ---
 
@@ -17,16 +17,12 @@ Last updated: 2026-10-29 (M2 implemented on branch `m2-ci`; see "Where we are")
 
 - **Status (2026-10-29):** M0 (PR #21), M1a (PR #22), M1b (PR #23), the
   quota fail-fast fix (PR #24), M1c (PR #25, LLM judge) and the pinned
-  generator model (PR #26, D15) are merged. **M2 (CI) is implemented on
-  branch `m2-ci`** (plan approved with the recommended options, D16–D17).
-- **Owner to do for M2:** `make test lint`, PR, merge. Then: create a Gemini
-  API key, ideally in a separate Google Cloud project (so CI and evals don't
-  share the live demo's 20/day quota), add it as repository secret
-  `GEMINI_API_KEY` (Settings -> Secrets and variables -> Actions), check
-  Settings -> Actions -> General -> Workflow permissions allow the
-  `issues: write` the model check asks for, and test the model check once
-  (Actions -> model-check -> Run workflow, `gen_model` = a fake name: it
-  should open an issue; close it afterwards).
+  generator model (PR #26, D15) and **M2 (PR #27, CI)** are merged. M2 is
+  set up: the `GEMINI_API_KEY` repository secret is added (key in a separate
+  Google Cloud project), and the model check was tested (fake model ->
+  "action needed" issue opened, then closed; real run -> both pinned
+  models available, nothing newer, no issue). The owner paused the work
+  here after the CI tidy-up PR (action versions for Node 24).
 - **Owner's data collection (as quota allows):** confirm on
   aistudio.google.com/rate-limit that the judge model (`gemini-3.6-flash`,
   override with `INSURANCE_RAG_JUDGE_MODEL`) has a free daily limit; then
@@ -43,12 +39,14 @@ Last updated: 2026-10-29 (M2 implemented on branch `m2-ci`; see "Where we are")
   1. Review the full v2 report, with judge scores and judge-human
      agreement, once the daily `make eval` / `make judge` runs cover all
      items (answers: 9/65 on 2026-10-28). This is M1d.
-  2. After M2 is merged and the secret is set: M3 (MLflow tracking +
-     threshold/k sweep, D5, D6) or M4 (Docker + cloud deployment, D3).
-     Propose the plan first; neither needs M1d's data to start.
-- **Check:** whether the live Streamlit app uses the same Gemini key as the
-  evaluation. If so, an eval run can exhaust the demo's daily quota; give
-  evaluations their own key/project.
+  2. **When the owner is back: ask which milestone comes next, M3
+     (MLflow tracking + threshold/k sweep, D5, D6) or M4 (Docker + cloud
+     deployment, D3), then propose its plan.** Neither needs M1d's data.
+  3. Watch the first real smoke-eval run (the tidy-up PR touches
+     `smoke-eval.yml`, so it triggers one): gates, quota use, duration.
+- **Check:** whether the live Streamlit app and local `make eval` runs use
+  the same Gemini key/project. CI now has its own project; local evals
+  could use that key too, to keep the demo's daily quota for visitors.
 - **Owner runs anything that calls Gemini** (no key in agent sessions);
   design each step as one command (`make eval ...`).
 - **Push access:** the agent session used so far could not push to the repo
@@ -359,7 +357,7 @@ commits: the feature and a log-wording fix for an existing test).
 Acceptance: one command produces the full report; every number in the
 README traces to a committed report.
 
-### M2. Tests and CI — `[~]` (implemented on branch `m2-ci`; owner to merge and add the secret)
+### M2. Tests and CI — `[x]` (PR #27; tidy-up PR for Node 24 action versions)
 
 - [x] Unit tests for the M1 code (metrics, judge parsing) — offline (M1b/M1c).
 - [x] Pipeline fingerprint in cached answers (D16).
@@ -376,8 +374,15 @@ README traces to a committed report.
   issue when a pinned model is missing or a newer `gemini-<v>-flash`
   appears; `gen_model` input to test the alert; `make model-check`.
 - [x] Offline tests (14), README CI section, Makefile.
-- [ ] Owner: merge; add the `GEMINI_API_KEY` secret (separate project
-  recommended); check workflow permissions; test the model check once.
+- [x] Owner: merged; `GEMINI_API_KEY` secret added (separate project);
+  model check tested: alert path (issue opened and closed) and real run
+  (both pinned models available, no newer Flash).
+- [x] Action versions moved off Node 20 (deprecation warning on the first
+  runs): `actions/checkout@v7` (its breaking change only affects
+  `pull_request_target`/`workflow_run`), `actions/setup-python@v6` (Node 24;
+  v7 removes some EOL Python versions without listing them, so not yet),
+  `actions/upload-artifact@v6` (Node 24). `actions/cache@v4` unchanged
+  (not flagged; its releases page couldn't be checked).
 
 ### M3. Experiment tracking with MLflow — `[ ]`
 
@@ -549,3 +554,12 @@ sections. 2–3 resume bullets, describing only what was built.
   (`smoke-eval`, `full-eval`, `model-check`), `src/model_check.py`,
   `make smoke` / `make model-check`, 14 offline tests, README CI section.
   Agent ran lint and YAML checks only; delivered as a `git am` mailbox.
+- **2026-10-29 — PR #27 (merged) and setup.** Owner added the
+  `GEMINI_API_KEY` secret from a separate Google Cloud project and tested
+  the model check: the fake-model run opened the "action needed" issue
+  (closed after), the real run found `gemini-3.8-flash` and
+  `gemini-3.6-flash` available and nothing newer (judge model confirmed).
+- **2026-10-29 — branch `ci-node24-plan`.** Workflows moved to Node 24
+  action versions (checkout v7, setup-python v6, upload-artifact v6) after
+  checking the official release notes; M2 marked done. **Paused.** Next:
+  owner picks M3 or M4; the PR's smoke-eval run is the first real one.
