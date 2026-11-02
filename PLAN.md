@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-11-02 (M4 implemented on branch `m4-deploy`; see "Where we are")
+Last updated: 2026-11-02 (M4 merged and deployed; /ask check pending until the quota resets; see "Where we are")
 
 ---
 
@@ -24,19 +24,34 @@ Last updated: 2026-11-02 (M4 implemented on branch `m4-deploy`; see "Where we ar
   models available, nothing newer, no issue). The CI tidy-up PR (#29,
   Node 24 action versions) is merged; its smoke eval was the first real one
   and passed (3/3 checks).
-- **M4 (Docker + Cloud Run) is implemented on branch `m4-deploy`** (owner
-  chose M4 before M3, with Cloud Run, a one-command deploy from his machine
-  and `us-central1`; D18). Owner's steps, in order (see docs/DEPLOY.md):
-  1. Meanwhile: pick/create the Google Cloud project, link billing, set a
-     budget alert (~$5, alerts only), install `gcloud` and `gcloud auth login`.
-  2. Apply the patch, `make test lint`, PR (the new `docker` CI job builds the
-     image and checks it starts), merge.
-  3. docs/DEPLOY.md steps 1-5: enable services, store the two secrets, grant
-     the service account roles, `make deploy PROJECT=<id>`, check `/health`
-     and one `/ask`.
-  4. Step 6: add `INSURANCE_RAG_API_URL` and `INSURANCE_RAG_API_TOKEN` to the
-     Streamlit app's secrets; confirm "Demo served by API" and one answer.
-  Then the agent closes M4 in this file.
+- **M4 (Docker + Cloud Run): merged (PR #30) and deployed (2026-11-02).**
+  Google Cloud project `insurance-rag-api` (billing linked, budget alert,
+  gcloud set up); DEPLOY.md steps 1-4 done (services enabled, secrets
+  `gemini-api-key` and `insurance-rag-api-token` stored, IAM granted,
+  deployed). Service URL:
+  https://insurance-rag-api-139157417718.us-central1.run.app
+  - `/health` OK: index loaded, key and token present, model gemini-3.8-flash.
+  - `/ask` timed out twice ("upstream request timeout" after 120 s). Logs:
+    the embedding call worked, the generation call never answered. A local
+    test with the same key then failed fast with the **daily quota used up**
+    (20/day for gemini-3.8-flash on the demo key's project, shared with the
+    live app; reset ~midnight Pacific). Cause of the Cloud Run stall not
+    certain: Gemini slow at that moment (and the stalled calls may have used
+    the last quota), or something specific to calls from Cloud Run.
+  - Fix on branch `fix/api-timeouts`: container gives each Gemini call 20 s
+    and one retry (503 with a clear message in < 1 min instead of a 2-minute
+    Cloud Run timeout), and the API logs one line per question (outcome,
+    seconds, error type and cause; never the text).
+- **Owner's next steps (tomorrow, after the quota reset):**
+  1. Apply `fix/api-timeouts` (`git am`, `make test lint` in the `rag` env,
+     PR, merge), then `make deploy PROJECT=$(gcloud config get-value project)`.
+  2. Re-run the DEPLOY.md step-5 `/ask` check with `time curl`.
+     - Answer in seconds -> step 6: add `INSURANCE_RAG_API_URL` and
+       `INSURANCE_RAG_API_TOKEN` to the Streamlit app's secrets, confirm
+       "Demo served by API" and one answer; the agent then closes M4.
+     - 503 -> read the `ask failed ... cause=...` log line
+       (`gcloud run services logs read insurance-rag-api --region us-central1
+       --limit 50`) and paste it to the agent.
 - **Owner's data collection (as quota allows):** confirm on
   aistudio.google.com/rate-limit that the judge model (`gemini-3.6-flash`,
   override with `INSURANCE_RAG_JUDGE_MODEL`) has a free daily limit; then
@@ -407,7 +422,7 @@ README traces to a committed report.
   config wins.
 - Version prompts (generation and judge) alongside configs.
 
-### M4. Containerized cloud deployment — `[~]` (implemented on branch `m4-deploy`; owner to merge and deploy)
+### M4. Containerized cloud deployment — `[~]` (merged as PR #30 and deployed; `/ask` check and Streamlit connection pending)
 
 - [x] `Dockerfile` (Python 3.11 slim, non-root, `$PORT`, healthcheck, proxy
   headers), `.dockerignore` (allowlist), `.gcloudignore`,
@@ -423,8 +438,12 @@ README traces to a committed report.
   services, Secret Manager, IAM, deploy, checks, Streamlit secrets, later
   ops, troubleshooting); `make docker-build`, `docker-run`, `deploy`.
 - [x] Offline tests (12); README "Deployment" section; api/README.
-- [ ] Owner: merge; deploy (docs/DEPLOY.md 1-5); connect the Streamlit
-  app (step 6); confirm the live demo answers through the API.
+- [x] Owner: merged (PR #30); deployed (DEPLOY.md 1-4); `/health` OK.
+- [~] `/ask` check: timed out on 2026-11-02 (see "Where we are"); fail-fast +
+  request logging fix on branch `fix/api-timeouts`; retest after the quota
+  reset.
+- [ ] Connect the Streamlit app (step 6); confirm the live demo answers
+  through the API.
 - Upload mode per D3 (stays in the Streamlit app).
 
 ### M5. Monitoring (privacy-safe) — `[ ]`
@@ -597,3 +616,10 @@ sections. 2–3 resume bullets, describing only what was built.
   targets, 12 offline tests, README/api README. Agent ran lint and YAML
   checks only; no Docker in the agent session, so the image is first built
   by the `docker` CI job. Delivered as a `git am` mailbox.
+- **2026-11-02 — PR #30 (merged) and first deploy.** Owner set up the Google
+  Cloud project `insurance-rag-api` and deployed to Cloud Run. `/health`
+  OK; `/ask` hit Cloud Run's 120 s timeout twice (generation call never
+  answered); the demo key's daily quota turned out to be used up. Branch
+  `fix/api-timeouts`: 20 s per Gemini call + 1 retry in the container,
+  per-question log lines (outcome, latency, error type and cause), DEPLOY.md
+  troubleshooting, 2 offline tests. **Paused until the quota resets.**
