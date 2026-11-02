@@ -183,6 +183,19 @@ period takes a few extra seconds while the service wakes up.
   public access (not usual for personal accounts). Deploy without that flag,
   then run `gcloud run services update insurance-rag-api --region us-central1
   --no-invoker-iam-check`.
+- **`/ask` returns 503 "quota is used up":** the Gemini key's free tier
+  allows 20 generation requests per day per project and model, shared with
+  anything else using that key. It resets at midnight Pacific; the message
+  says when.
+- **`/ask` returns 503 "temporarily unavailable":** Gemini didn't respond
+  (the container gives each call 20 s and one retry, so this comes back in
+  under a minute instead of hitting Cloud Run's 120 s limit). The service's
+  Logs show one `ask failed ... error=... cause=...` line per failed
+  question; `cause=APITimeoutError` means Gemini was too slow, a
+  `RateLimitError` means a rate limit.
+- **"upstream request timeout" after 2 minutes:** Cloud Run cut the request
+  off. With the current image this shouldn't happen; redeploy (`make deploy`)
+  if the service still runs an older image.
 - **The app says the answer service isn't reachable:** check the URL in the
   Streamlit secrets (no trailing path) and that `curl "$URL/health"` works.
 - **The app says it isn't authorized:** the token in the Streamlit secrets

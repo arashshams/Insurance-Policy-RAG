@@ -35,6 +35,7 @@ import logging
 import os
 import secrets
 import sys
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -66,6 +67,10 @@ DEMO_INDEX_DIR = os.environ.get(
 MAX_QUESTION_CHARS = int(os.environ.get("INSURANCE_RAG_MAX_QUESTION_CHARS", "1000"))
 
 log = logging.getLogger("insurance_rag.api")
+# One line per question goes to stdout (Cloud Run collects it): outcome,
+# latency and, on failure, the error type. Never the question or answer text.
+logging.basicConfig(level=os.environ.get("INSURANCE_RAG_LOG_LEVEL", "INFO"),
+                    format="%(levelname)s %(name)s: %(message)s")
 
 # Module-level cache for the opened collection (loaded once).
 _collection = None
@@ -95,9 +100,10 @@ app = FastAPI(
 async def _request_id(request: Request, call_next):
     """Echo the caller's X-Request-ID (or a new one) on every response, so a
     reply can be matched to the server's logs."""
-    rid = request.headers.get("x-request-id") or uuid.uuid4().hex
+    rid = (request.headers.get("x-request-id") or uuid.uuid4().hex)[:64]
+    request.state.request_id = rid
     response = await call_next(request)
-    response.headers["X-Request-ID"] = rid[:64]
+    response.headers["X-Request-ID"] = rid
     return response
 
 # Rate limiters (process-local; per-minute windows).
@@ -218,22 +224,37 @@ def ask(
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    rid = getattr(request.state, "request_id", "-")
+    started = time.monotonic()
+
+    def _log_failure(status: int, exc: Exception) -> None:
+        cause = type(exc.__cause__).__name__ if exc.__cause__ else "-"
+        log.warning("ask failed rid=%s status=%d error=%s cause=%s seconds=%.1f",
+                    rid, status, type(exc).__name__, cause, time.monotonic() - started)
+
     try:
         result = answer_question_detailed(collection, req.question, k=req.k)
     except GeminiQuotaExhaustedError as exc:
         # Daily quota used up: tell the client when it resets, not "in a minute".
+        _log_failure(503, exc)
         wait = int(exc.retry_after_s) + 1 if exc.retry_after_s else 3600
         raise HTTPException(
             status_code=503, detail=str(exc), headers={"Retry-After": str(wait)}
         ) from exc
     except GeminiUnavailableError as exc:
-        # Gemini overloaded / rate-limited even after the pipeline's retries:
-        # a temporary condition, so tell the client to come back later.
+        # Gemini overloaded / rate-limited / not responding even after the
+        # pipeline's retries: a temporary condition, so come back later.
+        _log_failure(503, exc)
         raise HTTPException(
             status_code=503, detail=str(exc), headers={"Retry-After": "60"}
         ) from exc
     except Exception as exc:  # noqa: BLE001 - surface pipeline errors as 502
+        _log_failure(502, exc)
         raise HTTPException(status_code=502, detail=f"Pipeline error: {exc}") from exc
+
+    log.info("ask ok rid=%s seconds=%.1f abstained=%s retrieved=%d generation_calls=%s",
+             rid, time.monotonic() - started, result["abstained"],
+             len(result["retrieved"]), result.get("generation_calls", "-"))
 
     chunks = [
         RetrievedChunk(

@@ -154,3 +154,46 @@ def test_client_explains_network_failures(api_client, raised, expected):
 def test_client_explains_http_errors(api_client, status, body, expected):
     with pytest.raises(api_client.ApiError, match=expected):
         api_client.ask("https://api.example", "q", post=lambda *a, **k: _Resp(status, body))
+
+
+# --- failing fast and logging why (fix after the first Cloud Run deploy) -------------
+def test_container_fails_fast_on_a_stuck_gemini_call():
+    df = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "INSURANCE_RAG_REQUEST_TIMEOUT=20" in df and "INSURANCE_RAG_MAX_RETRIES=1" in df
+
+
+def test_ask_logs_outcome_and_error_type_but_never_the_question(api, monkeypatch, caplog):
+    import logging
+
+    from fastapi.testclient import TestClient
+
+    from src import rag_pipeline as rp
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    monkeypatch.delenv("INSURANCE_RAG_API_TOKEN", raising=False)
+    monkeypatch.setattr(api, "_get_collection", lambda: object())
+    question = "Is my secret condition covered?"
+
+    def stuck(*a, **k):
+        try:
+            raise TimeoutError("gemini did not answer")
+        except TimeoutError as exc:
+            raise rp.GeminiUnavailableError("Gemini is temporarily unavailable") from exc
+    monkeypatch.setattr(api, "answer_question_detailed", stuck)
+    client = TestClient(api.app)
+    with caplog.at_level(logging.INFO, logger="insurance_rag.api"):
+        r = client.post("/ask", json={"question": question}, headers={"X-Request-ID": "rid-1"})
+    assert r.status_code == 503
+    line = next(rec.getMessage() for rec in caplog.records if "ask failed" in rec.getMessage())
+    assert "rid=rid-1" in line and "error=GeminiUnavailableError" in line
+    assert "cause=TimeoutError" in line and "status=503" in line
+
+    monkeypatch.setattr(api, "answer_question_detailed", lambda *a, **k: {
+        "answer": "Covered.", "pages": [7], "abstained": False, "citations_verified": True,
+        "retrieved": [], "generation_calls": 1})
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="insurance_rag.api"):
+        assert client.post("/ask", json={"question": question}).status_code == 200
+    ok = [rec.getMessage() for rec in caplog.records if "ask ok" in rec.getMessage()]
+    assert ok and "generation_calls=1" in ok[0]
+    assert all(question not in rec.getMessage() for rec in caplog.records)

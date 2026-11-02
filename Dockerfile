@@ -25,8 +25,13 @@ COPY --chown=appuser:appuser api/ api/
 COPY --chown=appuser:appuser app/demo_index/ app/demo_index/
 USER appuser
 
+# Fail fast on a stuck Gemini call: at most 20 s per attempt and one retry
+# (about 42 s per call in the worst case), so the API answers with a clear
+# 503 well before Cloud Run's request timeout (120 s) and the app's (60 s).
 ENV INSURANCE_RAG_ROOT=/srv \
-    PORT=8080
+    PORT=8080 \
+    INSURANCE_RAG_REQUEST_TIMEOUT=20 \
+    INSURANCE_RAG_MAX_RETRIES=1
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
