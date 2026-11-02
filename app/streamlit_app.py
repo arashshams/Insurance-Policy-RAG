@@ -34,6 +34,9 @@ import streamlit as st
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+APP_DIR = Path(__file__).resolve().parent  # for app/api_client.py
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
 
 # --- Page config (MUST be the first Streamlit command in the script) --------
 st.set_page_config(
@@ -257,44 +260,11 @@ def _get_uploaded_collection(file_bytes: bytes, file_name: str):
     return collection
 
 def _answer_via_api(question: str) -> dict:
-    """Ask the FastAPI backend and normalize its reply to the in-process shape
-    returned by answer_question_detailed (the fields the UI uses).
+    """Ask the FastAPI backend (see app/api_client.py, which turns network and
+    HTTP errors into visitor-friendly messages)."""
+    import api_client
 
-    Raises on transport/HTTP errors so the caller can surface them.
-    """
-    import requests
-
-    headers = {"Authorization": f"Bearer {API_TOKEN}"} if API_TOKEN else {}
-    resp = requests.post(
-        f"{API_URL}/ask", json={"question": question}, headers=headers, timeout=60
-    )
-    if resp.status_code >= 400:
-        # Show the API's own explanation (e.g. "the daily quota is used up,
-        # try again in about 13 hours") instead of a bare "503 Server Error".
-        try:
-            detail = resp.json().get("detail")
-        except Exception:  # noqa: BLE001 - non-JSON error body
-            detail = None
-        if isinstance(detail, str) and detail:
-            raise RuntimeError(detail)
-    resp.raise_for_status()
-    data = resp.json()
-    retrieved = [
-        {
-            "id": c.get("id", ""),
-            "text": c.get("text", ""),
-            "metadata": {"page": c.get("page")},
-            "score": c.get("score"),
-        }
-        for c in data.get("retrieved", [])
-    ]
-    return {
-        "answer": data.get("answer", ""),
-        "pages": data.get("pages", []),
-        "retrieved": retrieved,
-        "abstained": bool(data.get("abstained")),
-        "citations_verified": bool(data.get("citations_verified")),
-    }
+    return api_client.ask(API_URL, question, token=API_TOKEN)
 
 def _render_answer(question: str, collection, use_api: bool = False,
                    threshold: float = DISTANCE_THRESHOLD) -> None:
@@ -316,7 +286,10 @@ def _render_answer(question: str, collection, use_api: bool = False,
         return
 
     try:
-        with st.spinner("Retrieving and generating a grounded answer..."):
+        spinner = ("Asking the answer service... (the first question after a quiet "
+                   "period can take a few extra seconds while the server wakes up)"
+                   if use_api else "Retrieving and generating a grounded answer...")
+        with st.spinner(spinner):
             if use_api:
                 result = _answer_via_api(question)
             else:
