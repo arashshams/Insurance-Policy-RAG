@@ -90,6 +90,7 @@ api/
   README.md
 app/
   streamlit_app.py                  # Streamlit UI (demo + upload modes)
+  api_client.py                     # the app's HTTP client for the deployed API
   demo_index/                       # pre-built Chroma index of the SAMPLE policy
   README.md
 img/
@@ -119,6 +120,10 @@ tests/                              # offline tests (no API key needed)
 .github/workflows/smoke-eval.yml    # CI: 12-question eval with pass gates on relevant PRs
 .github/workflows/full-eval.yml     # manual full evaluation (+ judge), resumable
 .github/workflows/model-check.yml    # weekly: pinned models still available? newer ones?
+.github/workflows/docker.yml        # CI: build the API container and check it starts
+Dockerfile, .dockerignore           # API container (FastAPI + demo index), non-root
+requirements-api.txt                # the container's subset of requirements.txt
+docs/DEPLOY.md                      # step-by-step Cloud Run deployment
 .streamlit/config.toml              # Streamlit server settings (upload size cap)
 data/
   documents/                        # local policy PDF (NOT committed — privacy)
@@ -246,6 +251,23 @@ python -m src.evaluate --pdf my_policy.pdf --questions my_questions.json --resul
 
 This builds an in-memory index of the PDF (one embedding pass), runs the questions, and prints the in-scope/out-of-scope distance gap with a suggested threshold. Its report is written next to the results file, not into `eval/reports/`, because it quotes answers about your document. Apply it with `INSURANCE_RAG_UPLOAD_THRESHOLD` (app upload mode) or `INSURANCE_RAG_THRESHOLD` (everywhere). Keep private policies and their results out of the repo.
 
+## Deployment
+
+The API runs as a container on **Google Cloud Run**, and the live Streamlit app calls it over HTTPS for the demo policy:
+
+```
+visitor -> Streamlit app (Streamlit Community Cloud)
+             |- demo questions --HTTPS + bearer token--> FastAPI on Cloud Run -> demo index + Gemini
+             '- uploaded PDFs: indexed and answered inside the app (never sent to the API)
+```
+
+- **Container:** `Dockerfile` (Python 3.11 slim, non-root user, only `src/`, `api/` and the demo index; dependencies from `requirements-api.txt`). The index is opened at startup; `/health` reports whether it loaded. Secrets come from the environment, never the image.
+- **Cloud Run settings:** scales to zero when idle and to at most one instance, 1 GiB memory; the Gemini key and the API token come from Secret Manager. At demo traffic this stays within Cloud Run's free tier.
+- **CI:** the `docker` workflow builds the image and starts it without a key on every relevant PR, checking `/health` and that `/ask` fails cleanly, so a broken image never reaches a deploy.
+- **Uploads stay in the app** (decision D3): the deployed API serves only the bundled demo policy, because uploaded documents are private and per-session, and cloud instances come and go.
+
+Deploy with `make deploy PROJECT=<gcp-project-id>` after the one-time setup in [docs/DEPLOY.md](docs/DEPLOY.md); run the container locally with `make docker-build docker-run` (keys in a git-ignored `.env`).
+
 ## Responsible AI
 
 - Answers are grounded in retrieved document content and cited by page. Pages come from the passages the model actually cited; when it cites none, the app says the pages are those of all retrieved passages instead.
@@ -256,7 +278,7 @@ This builds an in-memory index of the PDF (one embedding pass), runs the questio
 
 ## Roadmap
 
-**Shipped:** the Streamlit MVP (bundled-policy demo plus a user-upload mode with a per-session, ephemeral index) is live at the [demo link above](https://insurance-policy-rag.streamlit.app/), and a FastAPI backend exposing `POST /ask` over the same pipeline is in the repo (`api/`), ready to be wired in over HTTP.
+**Shipped:** the Streamlit MVP (bundled-policy demo plus a user-upload mode with a per-session, ephemeral index) is live at the [demo link above](https://insurance-policy-rag.streamlit.app/), and a FastAPI backend exposing `POST /ask` over the same pipeline (`api/`) is packaged as a container for Google Cloud Run (see [Deployment](#deployment)), with an evaluation harness, an LLM judge and CI quality gates around it.
 
 **Possible next steps:** multi-document support (policy + amendments) and query logging / metrics.
 

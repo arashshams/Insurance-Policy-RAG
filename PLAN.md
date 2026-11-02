@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-10-29 (M2 merged as PR #27 and set up; paused before M3/M4, see "Where we are")
+Last updated: 2026-11-02 (M4 implemented on branch `m4-deploy`; see "Where we are")
 
 ---
 
@@ -21,8 +21,22 @@ Last updated: 2026-10-29 (M2 merged as PR #27 and set up; paused before M3/M4, s
   set up: the `GEMINI_API_KEY` repository secret is added (key in a separate
   Google Cloud project), and the model check was tested (fake model ->
   "action needed" issue opened, then closed; real run -> both pinned
-  models available, nothing newer, no issue). The owner paused the work
-  here after the CI tidy-up PR (action versions for Node 24).
+  models available, nothing newer, no issue). The CI tidy-up PR (#29,
+  Node 24 action versions) is merged; its smoke eval was the first real one
+  and passed (3/3 checks).
+- **M4 (Docker + Cloud Run) is implemented on branch `m4-deploy`** (owner
+  chose M4 before M3, with Cloud Run, a one-command deploy from his machine
+  and `us-central1`; D18). Owner's steps, in order (see docs/DEPLOY.md):
+  1. Meanwhile: pick/create the Google Cloud project, link billing, set a
+     budget alert (~$5, alerts only), install `gcloud` and `gcloud auth login`.
+  2. Apply the patch, `make test lint`, PR (the new `docker` CI job builds the
+     image and checks it starts), merge.
+  3. docs/DEPLOY.md steps 1-5: enable services, store the two secrets, grant
+     the service account roles, `make deploy PROJECT=<id>`, check `/health`
+     and one `/ask`.
+  4. Step 6: add `INSURANCE_RAG_API_URL` and `INSURANCE_RAG_API_TOKEN` to the
+     Streamlit app's secrets; confirm "Demo served by API" and one answer.
+  Then the agent closes M4 in this file.
 - **Owner's data collection (as quota allows):** confirm on
   aistudio.google.com/rate-limit that the judge model (`gemini-3.6-flash`,
   override with `INSURANCE_RAG_JUDGE_MODEL`) has a free daily limit; then
@@ -39,11 +53,9 @@ Last updated: 2026-10-29 (M2 merged as PR #27 and set up; paused before M3/M4, s
   1. Review the full v2 report, with judge scores and judge-human
      agreement, once the daily `make eval` / `make judge` runs cover all
      items (answers: 9/65 on 2026-10-28). This is M1d.
-  2. **When the owner is back: ask which milestone comes next, M3
-     (MLflow tracking + threshold/k sweep, D5, D6) or M4 (Docker + cloud
-     deployment, D3), then propose its plan.** Neither needs M1d's data.
-  3. Watch the first real smoke-eval run (the tidy-up PR touches
-     `smoke-eval.yml`, so it triggers one): gates, quota use, duration.
+  2. Finish M4 (owner's deploy steps above), then M3 (MLflow tracking +
+     threshold/k sweep, D5, D6), ideally once M1d's answers are cached.
+     Propose the M3 plan first.
 - **Check:** whether the live Streamlit app and local `make eval` runs use
   the same Gemini key/project. CI now has its own project; local evals
   could use that key too, to keep the demo's daily quota for visitors.
@@ -230,6 +242,7 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | D4 | LLM judge uses a **pinned** model version, different from the generator: default `gemini-3.6-flash` (`INSURANCE_RAG_JUDGE_MODEL`). | `-latest` aliases make judge scores drift; a different model reduces self-grading bias; on the free tier each model has its own daily quota, so judging doesn't use the generator's. Still a Gemini judge of Gemini answers: agreement with the owner's hand scores is reported. A judge from another provider is a possible later upgrade. | Decided (owner, 2026-10-28) |
 | D16 | **Pipeline fingerprint in cached answers:** each answer records a hash of the prompts, generation budget, reasoning setting, chunking and IDK string (`rag_pipeline.pipeline_fingerprint()`); a cached answer is reused only if it matches. Answers cached before this change (no fingerprint) adopt the current one once. | The cache key covered question/index/model/threshold/k but not the prompt, so editing the prompt silently reused old answers in reports and would hide regressions in CI. Adoption keeps the owner's in-progress v2 run (nothing changed since those answers). | Decided (owner, 2026-10-29) |
 | D17 | **CI evaluation design:** smoke eval of 12 items (`eval/smoke_v2.txt`, every category, edge cases of the guardrail) runs automatically on PRs touching `src/`, `eval/`, `app/demo_index/` or `requirements.txt`, always with fresh answers and `--max-calls 15`; gates: no abstain item answered, no answerable item abstained, at most 1 failed item; no judge in CI. Skips (not fails) without the secret (forks) or on a quota stop. Full eval is manual only, resumable through the GitHub cache. Model check weekly. | Catches regressions where the PR changes behaviour while keeping quota use small; strict on the guardrail, tolerant of one off answer; quota or forks never block a PR. A scheduled full eval would only re-measure the pinned, unchanged system. | Decided (owner, 2026-10-29) |
+| D18 | **Deploy the API to Google Cloud Run** (`us-central1`), from source with one command from the owner's machine (`make deploy`, Cloud Build builds the `Dockerfile`): min 0 / max 1 instance, 1 GiB, Gemini key and API token from Secret Manager, public URL with the app's bearer token required for `/ask`. Slim image from `requirements-api.txt` (same pins as `requirements.txt`, test-enforced), non-root, index opened at startup. CI builds and starts the image with no key on relevant PRs. Deploy from GitHub Actions (Workload Identity Federation) deferred. | Checked free tiers (2026-11-02): Cloud Run's free tier (2M requests/month + CPU/memory time, request-based billing, nothing charged while idle) fits a demo and runs the same container; Render's free tier sleeps after 15 min (~1 min wake), has 512 MB and may suspend services that call external APIs heavily; Fly.io has no free tier for new accounts; Hugging Face Docker Spaces terms for free accounts were unclear. Cost: a billing account is required; image storage above Artifact Registry's free 0.5 GB costs cents. | Decided (owner, 2026-11-02) |
 | D15 | **Pin the generator model** (`gemini-3.8-flash`) instead of the `gemini-flash-latest` alias. Cached answers no longer expire for a pinned model (14 days only for an alias). Upgrades are deliberate: evaluate the new model via `INSURANCE_RAG_GEN_MODEL`, compare reports, then change the default (README "Upgrading the model"). A weekly CI job (M2) lists the models the key can use and opens an issue when the pinned model disappears or a newer Flash appears. | Every reported number describes one model; the guardrail's model-refusal layer depends on the generator's behaviour, so a silent switch could change it unmeasured; an alias also forced re-asking all answers every 14 days, wiping judge and human scores. Cost: the app breaks if the pinned model is retired before it is bumped, hence the weekly check. | Decided (owner, 2026-10-28) |
 | D14 | Judge design: one call per item scores **faithfulness** (vs the retrieved passages) and **correctness** (vs the reference answer) on a **0–2** scale; only answered answer/defer items with the right behaviour are judged; prompt is a versioned file whose name + hash are in the cache key; **separate `make judge` step** with its own cache; "strict pass" = judge-free pass + both scores 2; human check on ~20 stratified items with exact / within-one / quadratic-weighted kappa, counted only for the answer the human scored (answer hash). | Few levels give steadier judge scores and an easier human sheet; separate steps keep the generator's and judge's quotas and caches independent; hashes make every score traceable and stale human scores visible. | Decided (owner, 2026-10-28) |
 | D5 | MLflow **wraps the existing harness** (logs its config + metrics) instead of a second eval path. | Rule 4 / single source of metrics. | Proposed (part of M3 plan) |
@@ -394,17 +407,25 @@ README traces to a committed report.
   config wins.
 - Version prompts (generation and judge) alongside configs.
 
-### M4. Containerized cloud deployment — `[ ]`
+### M4. Containerized cloud deployment — `[~]` (implemented on branch `m4-deploy`; owner to merge and deploy)
 
-- Dockerfile for the FastAPI backend (health check, request validation
-  already exist).
-- Deploy to a free/cheap host (candidates: Google Cloud Run, Render, Fly.io,
-  Hugging Face Spaces; verify current free-tier terms at the time).
-  Document step by step; set `GEMINI_API_KEY` and `INSURANCE_RAG_API_TOKEN`
-  as host secrets.
-- Streamlit app calls the deployed API for the demo (`INSURANCE_RAG_API_URL`
-  + token already supported); local in-process fallback stays for dev.
-- Upload mode per D3.
+- [x] `Dockerfile` (Python 3.11 slim, non-root, `$PORT`, healthcheck, proxy
+  headers), `.dockerignore` (allowlist), `.gcloudignore`,
+  `requirements-api.txt` (subset of `requirements.txt`, same pins).
+- [x] API: index opened at startup (lifespan; failure logged, `/health`
+  reports `index_loaded`), `X-Request-ID` on every response.
+- [x] App: `app/api_client.py` (HTTP client with visitor-friendly errors for
+  timeouts, unreachable service, 401, API error details); "waking up"
+  spinner text when the API is used.
+- [x] CI: `docker.yml` builds the image and starts it without a key; checks
+  `/health` (index loaded, no key baked in) and that `/ask` returns 503.
+- [x] `docs/DEPLOY.md` (Cloud Run step by step: billing + budget alert,
+  services, Secret Manager, IAM, deploy, checks, Streamlit secrets, later
+  ops, troubleshooting); `make docker-build`, `docker-run`, `deploy`.
+- [x] Offline tests (12); README "Deployment" section; api/README.
+- [ ] Owner: merge; deploy (docs/DEPLOY.md 1-5); connect the Streamlit
+  app (step 6); confirm the live demo answers through the API.
+- Upload mode per D3 (stays in the Streamlit app).
 
 ### M5. Monitoring (privacy-safe) — `[ ]`
 
@@ -563,3 +584,16 @@ sections. 2–3 resume bullets, describing only what was built.
   action versions (checkout v7, setup-python v6, upload-artifact v6) after
   checking the official release notes; M2 marked done. **Paused.** Next:
   owner picks M3 or M4; the PR's smoke-eval run is the first real one.
+- **2026-10-29 — PR #29 (merged).** Node 24 action versions; its smoke eval
+  (first real run) passed.
+- **2026-11-02 — branch `m4-deploy`.** Owner chose M4 before M3 (M3's sweep
+  is slow on the free quota until M1d's answers exist) and approved Cloud
+  Run, one-command deploy, `us-central1` (D18), after a check of current
+  free tiers (Cloud Run, Render, Fly.io, Hugging Face). Added the
+  Dockerfile and ignore files, `requirements-api.txt`, API startup load and
+  request ids, `app/api_client.py`, `docker.yml`, `docs/DEPLOY.md`
+  (commands checked against Google's docs: `--update-secrets`,
+  `roles/run.builder`, `roles/secretmanager.secretAccessor`), Makefile
+  targets, 12 offline tests, README/api README. Agent ran lint and YAML
+  checks only; no Docker in the agent session, so the image is first built
+  by the `docker` CI job. Delivered as a `git am` mailbox.

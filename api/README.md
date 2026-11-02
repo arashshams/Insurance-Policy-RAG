@@ -110,19 +110,22 @@ All configuration is via environment variables (the pipeline reads them too):
 The demo index must be present for `/ask` to work; if it is missing the
 endpoint returns HTTP 503 with a message pointing at `app/README.md`.
 
-## Deploy (free tier)
+## Deploy
 
-The service is a standard ASGI app (`api.main:app`), so it runs on any host
-that can run `uvicorn`. Candidate free tiers (verify current limits before
-choosing): Hugging Face Spaces, Render, Fly.io.
+The service ships as a container (`Dockerfile` at the repo root) and is
+deployed to Google Cloud Run: see [docs/DEPLOY.md](../docs/DEPLOY.md) for the
+step-by-step guide (`make deploy PROJECT=<id>`). Locally:
 
-General steps:
+```bash
+make docker-build
+make docker-run      # reads GEMINI_API_KEY (and optionally INSURANCE_RAG_API_TOKEN) from .env
+curl localhost:8080/health
+```
 
-1. Point the host at this repo and install `requirements.txt`.
-2. Start command: `uvicorn api.main:app --host 0.0.0.0 --port $PORT`.
-3. Set `GEMINI_API_KEY` and `INSURANCE_RAG_API_TOKEN` as secrets/environment
-   variables on the host.
-4. Ensure `app/demo_index/` ships with the deploy (it is committed to the repo).
+The container listens on `$PORT` (default 8080), opens the demo index at
+startup (`/health` reports `index_loaded`), and echoes or creates an
+`X-Request-ID` header on every response. It is a standard ASGI app
+(`api.main:app`), so any host that runs containers or `uvicorn` works too.
 
 ## Notes
 

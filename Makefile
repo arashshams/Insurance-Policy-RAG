@@ -9,7 +9,7 @@
 PYTHON ?= python
 
 .DEFAULT_GOAL := help
-.PHONY: help setup test lint eval eval-v1 smoke judge judge-sheet model-check eval-set run-app run-api restore-index clean
+.PHONY: help setup test lint eval eval-v1 smoke judge judge-sheet model-check eval-set run-app run-api docker-build docker-run deploy restore-index clean
 
 help: ## Show targets and the command each one runs
 	@echo "Targets (plain command in brackets):"
@@ -25,6 +25,9 @@ help: ## Show targets and the command each one runs
 	@echo "  eval-set       validate eval set, rebuild review    [python -m src.eval_set]"
 	@echo "  run-app        Streamlit app on :8501               [python -m streamlit run app/streamlit_app.py]"
 	@echo "  run-api        FastAPI backend on :8000             [python -m uvicorn api.main:app --reload]"
+	@echo "  docker-build   build the API container               [docker build -t insurance-rag-api .]"
+	@echo "  docker-run     run it on :8080 with keys from .env   [docker run --rm -p 8080:8080 --env-file .env insurance-rag-api]"
+	@echo "  deploy         deploy the API to Cloud Run (docs/DEPLOY.md; PROJECT=<id> [REGION=us-central1])"
 	@echo "  restore-index  undo local changes to the demo index [git restore app/demo_index]"
 	@echo "  clean          remove caches                        [rm -rf .pytest_cache .ruff_cache **/__pycache__]"
 
@@ -69,6 +72,23 @@ run-app:
 
 run-api:
 	$(PYTHON) -m uvicorn api.main:app --reload
+
+# API container (PLAN.md M4). .env holds GEMINI_API_KEY=... (never committed).
+IMAGE ?= insurance-rag-api
+docker-build:
+	docker build -t $(IMAGE) .
+
+docker-run:
+	docker run --rm -p 8080:8080 --env-file .env $(IMAGE)
+
+# Deploy to Cloud Run from source (see docs/DEPLOY.md for the one-time setup).
+REGION ?= us-central1
+SERVICE ?= insurance-rag-api
+deploy:
+	@test -n "$(PROJECT)" || (echo "usage: make deploy PROJECT=<gcp-project-id> [REGION=us-central1]"; exit 2)
+	gcloud run deploy $(SERVICE) --source . --project $(PROJECT) --region $(REGION) \
+	  --allow-unauthenticated --min-instances 0 --max-instances 1 --memory 1Gi --cpu 1 --timeout 120 \
+	  --update-secrets=GEMINI_API_KEY=gemini-api-key:latest,INSURANCE_RAG_API_TOKEN=insurance-rag-api-token:latest
 
 # ChromaDB rewrites the committed index files when it opens them; run this
 # after using the app or the evaluation locally, before committing.

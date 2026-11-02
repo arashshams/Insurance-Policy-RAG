@@ -1,0 +1,63 @@
+name: docker
+
+# Builds the API container and checks that it starts and answers /health,
+# with no API key (so no Gemini quota is used): a broken image is caught here,
+# before a deploy. Nothing is pushed anywhere.
+on:
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "requirements-api.txt"
+      - "api/**"
+      - "src/**"
+      - "app/demo_index/**"
+      - ".github/workflows/docker.yml"
+  push:
+    branches: [master]
+    paths:
+      - "Dockerfile"
+      - "requirements-api.txt"
+      - "api/**"
+      - "src/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the image
+        run: docker build -t insurance-rag-api:ci .
+      - name: Start it (no API key)
+        run: docker run -d --name api -p 8080:8080 -e PORT=8080 insurance-rag-api:ci
+      - name: Wait for /health and check it
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS localhost:8080/health -o health.json; then break; fi
+            sleep 2
+          done
+          cat health.json
+          python3 - <<'PY'
+          import json
+          h = json.load(open("health.json"))
+          assert h["status"] == "ok", h
+          assert h["index_present"] and h["index_loaded"], "demo index not loaded at startup"
+          assert h["api_key_present"] is False, "no key should be baked into the image"
+          print("health OK:", h)
+          PY
+      - name: /ask without a key fails cleanly (503, not a crash)
+        run: |
+          code=$(curl -s -o ask.json -w '%{http_code}' -X POST localhost:8080/ask \
+            -H 'content-type: application/json' -d '{"question": "Is physiotherapy covered?"}')
+          cat ask.json; echo
+          test "$code" = "503"
+      - name: Image size
+        run: docker image ls insurance-rag-api:ci
+      - name: Container logs
+        if: always()
+        run: docker logs api || true

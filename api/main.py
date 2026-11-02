@@ -31,9 +31,12 @@ Run locally:
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import sys
+import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -62,14 +65,40 @@ DEMO_INDEX_DIR = os.environ.get(
 
 MAX_QUESTION_CHARS = int(os.environ.get("INSURANCE_RAG_MAX_QUESTION_CHARS", "1000"))
 
+log = logging.getLogger("insurance_rag.api")
+
+# Module-level cache for the opened collection (loaded once).
+_collection = None
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Open the demo index at startup, so the first visitor after a cold start
+    doesn't also pay for opening it. A failure is logged, not fatal: /health
+    stays up and reports index_loaded=false, and /ask retries the load."""
+    try:
+        _get_collection()
+    except Exception as exc:  # noqa: BLE001 - keep the service up for /health
+        log.warning("Demo index not loaded at startup: %s", exc)
+    yield
+
+
 app = FastAPI(
     title="Insurance-Policy-RAG API",
-    version="1.1.0",
+    version="1.2.0",
     description="Grounded, page-cited Q&A over an insurance policy.",
+    lifespan=_lifespan,
 )
 
-# Module-level cache for the opened collection (loaded lazily, once).
-_collection = None
+
+@app.middleware("http")
+async def _request_id(request: Request, call_next):
+    """Echo the caller's X-Request-ID (or a new one) on every response, so a
+    reply can be matched to the server's logs."""
+    rid = request.headers.get("x-request-id") or uuid.uuid4().hex
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = rid[:64]
+    return response
 
 # Rate limiters (process-local; per-minute windows).
 _client_limiter = guardrails.RateLimiter(guardrails.API_RATE_PER_CLIENT, 60)
@@ -161,6 +190,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "index_present": os.path.isdir(DEMO_INDEX_DIR),
+        "index_loaded": _collection is not None,
         "api_key_present": _api_key_present(),
         "auth_required": bool(_api_token()),
         "model_default": GEN_MODEL,
