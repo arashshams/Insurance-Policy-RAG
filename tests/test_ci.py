@@ -169,8 +169,8 @@ def test_model_check_main_writes_github_outputs(monkeypatch, tmp_path):
     monkeypatch.setattr(rp, "GEN_MODEL", "gemini-3.8-flash")
     report = tmp_path / "report.md"
     assert mc.main(["--out", str(report)]) == 0
-    assert out.read_text() == "action_needed=true\nupgrade_available=true\n"
-    assert "gemini-9-flash" in report.read_text()
+    assert out.read_text(encoding="utf-8") == "action_needed=true\nupgrade_available=true\n"
+    assert "gemini-9-flash" in report.read_text(encoding="utf-8")
 
 
 def test_model_check_without_key_or_network(monkeypatch):
@@ -190,7 +190,7 @@ def test_model_check_without_key_or_network(monkeypatch):
 def test_workflows_are_valid_yaml():
     yaml = pytest.importorskip("yaml")
     for name in ("tests.yml", "smoke-eval.yml", "full-eval.yml", "model-check.yml"):
-        wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / name).read_text())
+        wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8"))
         assert "jobs" in wf, name
 
 
@@ -202,5 +202,5 @@ def test_model_check_watches_the_fallback_model(monkeypatch, tmp_path):
     monkeypatch.setattr(mc, "list_models", lambda key: ["gemini-3.8-flash", "gemini-3.6-flash"])
     report = tmp_path / "r.md"
     assert mc.main(["--out", str(report)]) == 0
-    text = report.read_text()
+    text = report.read_text(encoding="utf-8")  # the report is UTF-8 (em dashes); Windows defaults to cp1252
     assert "fallback: `gemini-3.7-flash` — **not available**" in text and "Action needed" in text
