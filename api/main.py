@@ -201,6 +201,19 @@ class AskResponse(BaseModel):
 
 
 # --- Endpoints --------------------------------------------------------------
+@app.get("/")
+def root() -> dict[str, Any]:
+    """What this service is, for people who open the base URL in a browser
+    (the Streamlit app links to it). Never calls the LLM."""
+    return {
+        "service": "Insurance-Policy-RAG API",
+        "description": "Grounded, page-cited answers about a sample insurance policy.",
+        "endpoints": {"health": "GET /health", "ask": "POST /ask (bearer token)",
+                      "docs": "/docs"},
+        "source": "https://github.com/arashshams/Insurance-Policy-RAG",
+    }
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     """Lightweight readiness probe; never calls the LLM."""
