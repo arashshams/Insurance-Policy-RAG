@@ -227,3 +227,12 @@ def test_client_passes_through_which_model_answered(api_client):
              "retrieved": [], "model": "gemini-3.6-flash", "fallback_used": True}
     r = api_client.ask("https://api.example", "q", post=lambda *a, **k: _Resp(200, reply))
     assert r["model_used"] == "gemini-3.6-flash" and r["fallback_used"] is True
+
+
+def test_root_describes_the_service(api):
+    from fastapi.testclient import TestClient
+
+    r = TestClient(api.app).get("/")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["service"] == "Insurance-Policy-RAG API" and body["endpoints"]["docs"] == "/docs"

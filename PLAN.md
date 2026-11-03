@@ -9,13 +9,13 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-11-03 (fallback model on branch `gen-fallback`; M4 pending one answered /ask; see "Where we are")
+Last updated: 2026-11-03 (M4 done: API on Cloud Run, live app connected; see "Where we are")
 
 ---
 
 ## Where we are (read this first when resuming)
 
-- **Status (2026-10-29):** M0 (PR #21), M1a (PR #22), M1b (PR #23), the
+- **Status (2026-11-03):** M0 (PR #21), M1a (PR #22), M1b (PR #23), the
   quota fail-fast fix (PR #24), M1c (PR #25, LLM judge) and the pinned
   generator model (PR #26, D15) and **M2 (PR #27, CI)** are merged. M2 is
   set up: the `GEMINI_API_KEY` repository secret is added (key in a separate
@@ -24,52 +24,28 @@ Last updated: 2026-11-03 (fallback model on branch `gen-fallback`; M4 pending on
   models available, nothing newer, no issue). The CI tidy-up PR (#29,
   Node 24 action versions) is merged; its smoke eval was the first real one
   and passed (3/3 checks).
-- **M4 (Docker + Cloud Run): merged (PR #30) and deployed (2026-11-02).**
-  Google Cloud project `insurance-rag-api` (billing linked, budget alert,
-  gcloud set up); DEPLOY.md steps 1-4 done (services enabled, secrets
-  `gemini-api-key` and `insurance-rag-api-token` stored, IAM granted,
-  deployed). Service URL:
+- **M4 (Docker + Cloud Run) is done (2026-11-03).** The API runs on Cloud
+  Run (project `insurance-rag-api`, `us-central1`):
   https://insurance-rag-api-139157417718.us-central1.run.app
-  - `/health` OK: index loaded, key and token present, model gemini-3.8-flash.
-  - `/ask` timed out twice ("upstream request timeout" after 120 s). Logs:
-    the embedding call worked, the generation call never answered. A local
-    test with the same key then failed fast with the **daily quota used up**
-    (20/day for gemini-3.8-flash on the demo key's project, shared with the
-    live app; reset ~midnight Pacific). Cause of the Cloud Run stall not
-    certain: Gemini slow at that moment (and the stalled calls may have used
-    the last quota), or something specific to calls from Cloud Run.
-  - Fix merged (PR #31): each Gemini call gets 20 s and one retry in the
-    container, and the API logs one line per question.
-  - **2026-11-03, root cause found.** After redeploying, `/ask` returned a
-    clean 503 in 23 s; the log showed Gemini itself answering the
-    generation call with `503 Service Unavailable`
-    (`cause=InternalServerError`). The same key from the owner's laptop got
-    `503 UNAVAILABLE: "This model is currently experiencing high demand"`
-    for `gemini-3.8-flash` (5 retries, 4 minutes). So the deployment is
-    correct; the pinned model was overloaded, two days running.
-  - Owner chose a **serving fallback model** (D19), on branch
-    `gen-fallback`: when `gemini-3.8-flash` is unavailable (overloaded,
-    rate-limited or out of daily quota) the API and the app answer with
-    `gemini-3.6-flash` (one attempt on the main model, then the fallback);
-    answers report `model` / `fallback_used`; the evaluation never falls
-    back; the model check watches the fallback; smoke-eval can be run
-    against any generator (`gen_model` input).
-- **Owner's next steps:**
-  1. Apply `gen-fallback` (`git am`, `make test lint` in the `rag` env, PR,
-     merge), then `make deploy PROJECT=$(gcloud config get-value project)`.
-  2. Actions -> smoke-eval -> Run workflow with `gen_model` =
-     `gemini-3.6-flash`: checks the fallback model passes the gates (about 12
-     calls on the CI key's project).
-  3. Re-run the DEPLOY.md step-5 `/ask` check. Expect an answer; if the main
-     model is still overloaded, `"fallback_used": true, "model":
-     "gemini-3.6-flash"`.
-  4. DEPLOY.md step 6: add `INSURANCE_RAG_API_URL` and
-     `INSURANCE_RAG_API_TOKEN` to the Streamlit app's secrets; confirm "Demo
-     served by API" and one answer. Then the agent closes M4.
-- **Owner's data collection (as quota allows):** confirm on
-  aistudio.google.com/rate-limit that the judge model (`gemini-3.6-flash`,
-  override with `INSURANCE_RAG_JUDGE_MODEL`) has a free daily limit; then
-  daily `make eval` and `make judge` until all items are covered,
+  and the live Streamlit app sends demo questions to it ("Demo served by
+  API"). Verified: `/health` OK; `/ask` answered correctly in 5.4 s with the
+  main model (page 10 cited). On the way: Gemini's `gemini-3.8-flash`
+  returned 503 "high demand" on two days, which led to the API fail-fast fix
+  (PR #31) and the serving fallback model (PR #32, D19). The fallback
+  (`gemini-3.6-flash`) passed the guardrail on the smoke subset but
+  over-refused two answerable items (see D19); kept on purpose.
+- **Next items (propose plans first):**
+  1. M1d (committed v2 report + failure analysis) once the owner's daily
+     `make eval` / `make judge` runs cover all items, then the hand-scoring
+     sheet. Tip: running local evals with the CI key's project keeps the
+     live demo's 20/day quota for visitors.
+  2. M3 (MLflow tracking + threshold/k sweep, D5, D6), best after M1d's
+     answers are cached.
+  3. Optional: re-run smoke-eval with `gen_model=gemini-3.6-flash` once to
+     see whether the fallback's two misses repeat.
+- **Owner's data collection (as quota allows; answers 9/65 on 2026-10-28):**
+  the judge model `gemini-3.6-flash` is available to the key (model check,
+  2026-10-29); daily `make eval` and `make judge` until all items are covered,
   `make judge-sheet`, hand-score the CSV, a final `make eval` for the
   report. Since the pinning PR, the 9 answers cached under
   `gemini-flash-latest` are asked again once (model name is in the cache
@@ -78,16 +54,6 @@ Last updated: 2026-11-03 (fallback model on branch `gen-fallback`; M4 pending on
   model (D13). Full v2 answers need ~60, the judge up to ~47 on its own
   model's quota; the CI smoke eval up to ~12 per relevant PR. Runs resume
   from the cache, so spreading them over days is fine.
-- **Next items (propose plans first):**
-  1. Review the full v2 report, with judge scores and judge-human
-     agreement, once the daily `make eval` / `make judge` runs cover all
-     items (answers: 9/65 on 2026-10-28). This is M1d.
-  2. Finish M4 (owner's deploy steps above), then M3 (MLflow tracking +
-     threshold/k sweep, D5, D6), ideally once M1d's answers are cached.
-     Propose the M3 plan first.
-- **Check:** whether the live Streamlit app and local `make eval` runs use
-  the same Gemini key/project. CI now has its own project; local evals
-  could use that key too, to keep the demo's daily quota for visitors.
 - **Owner runs anything that calls Gemini** (no key in agent sessions);
   design each step as one command (`make eval ...`).
 - **Push access:** the agent session used so far could not push to the repo
@@ -271,7 +237,7 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | D4 | LLM judge uses a **pinned** model version, different from the generator: default `gemini-3.6-flash` (`INSURANCE_RAG_JUDGE_MODEL`). | `-latest` aliases make judge scores drift; a different model reduces self-grading bias; on the free tier each model has its own daily quota, so judging doesn't use the generator's. Still a Gemini judge of Gemini answers: agreement with the owner's hand scores is reported. A judge from another provider is a possible later upgrade. | Decided (owner, 2026-10-28) |
 | D16 | **Pipeline fingerprint in cached answers:** each answer records a hash of the prompts, generation budget, reasoning setting, chunking and IDK string (`rag_pipeline.pipeline_fingerprint()`); a cached answer is reused only if it matches. Answers cached before this change (no fingerprint) adopt the current one once. | The cache key covered question/index/model/threshold/k but not the prompt, so editing the prompt silently reused old answers in reports and would hide regressions in CI. Adoption keeps the owner's in-progress v2 run (nothing changed since those answers). | Decided (owner, 2026-10-29) |
 | D17 | **CI evaluation design:** smoke eval of 12 items (`eval/smoke_v2.txt`, every category, edge cases of the guardrail) runs automatically on PRs touching `src/`, `eval/`, `app/demo_index/` or `requirements.txt`, always with fresh answers and `--max-calls 15`; gates: no abstain item answered, no answerable item abstained, at most 1 failed item; no judge in CI. Skips (not fails) without the secret (forks) or on a quota stop. Full eval is manual only, resumable through the GitHub cache. Model check weekly. | Catches regressions where the PR changes behaviour while keeping quota use small; strict on the guardrail, tolerant of one off answer; quota or forks never block a PR. A scheduled full eval would only re-measure the pinned, unchanged system. | Decided (owner, 2026-10-29) |
-| D19 | **Serving fallback model:** the API and the Streamlit app pass `fallback_model=GEN_FALLBACK_MODEL` (`gemini-3.6-flash`, env `INSURANCE_RAG_GEN_FALLBACK_MODEL`, "" disables). The main model gets one attempt; if Gemini is unavailable for it (503 overload, rate limit, daily quota) the fallback answers. Every answer reports `model_used` / `fallback_used` (API fields `model`, `fallback_used`; log line `model=... fallback=... reason=...`; app caption). The evaluation and judge never fall back (they measure the pinned generator); smoke-eval has a `gen_model` input to check the fallback against the gates; the weekly model check watches it. App timeout 90 s (two attempts) inside Cloud Run's 120 s. | `gemini-3.8-flash` returned 503 "high demand" on two consecutive days, so the demo was down while the deployment itself was fine. A documented, visible exception to strict pinning (D15) keeps the demo answering; per-model free-tier quotas mean the fallback also covers the main model's daily limit. Cost: some answers come from a model not evaluated as the generator, hence the smoke-eval check and the labels. | Decided (owner, 2026-11-03) |
+| D19 | **Serving fallback model:** the API and the Streamlit app pass `fallback_model=GEN_FALLBACK_MODEL` (`gemini-3.6-flash`, env `INSURANCE_RAG_GEN_FALLBACK_MODEL`, "" disables). The main model gets one attempt; if Gemini is unavailable for it (503 overload, rate limit, daily quota) the fallback answers. Every answer reports `model_used` / `fallback_used` (API fields `model`, `fallback_used`; log line `model=... fallback=... reason=...`; app caption). The evaluation and judge never fall back (they measure the pinned generator); smoke-eval has a `gen_model` input to check the fallback against the gates; the weekly model check watches it. App timeout 90 s (two attempts) inside Cloud Run's 120 s. | `gemini-3.8-flash` returned 503 "high demand" on two consecutive days, so the demo was down while the deployment itself was fine. A documented, visible exception to strict pinning (D15) keeps the demo answering; per-model free-tier quotas mean the fallback also covers the main model's daily limit. Cost: some answers come from a model not evaluated as the generator, hence the smoke-eval check and the labels. | Decided (owner, 2026-11-03). **Fallback check (smoke subset, 2026-11-03):** `gemini-3.6-flash` passed 10/12; guardrail 100% (no out-of-scope question answered), evidence hit 100%, but it said "I don't know" on `defer_01` (should point to the Schedule of Benefits) and `adv_02` (injection plus an answerable cosmetic-surgery question), so the "no wrongful abstention" gate failed. Its failure mode is over-refusal, the safe direction, and it only answers while the main model is unavailable: owner kept the fallback. One run only; re-run to see if the misses repeat. |
 | D18 | **Deploy the API to Google Cloud Run** (`us-central1`), from source with one command from the owner's machine (`make deploy`, Cloud Build builds the `Dockerfile`): min 0 / max 1 instance, 1 GiB, Gemini key and API token from Secret Manager, public URL with the app's bearer token required for `/ask`. Slim image from `requirements-api.txt` (same pins as `requirements.txt`, test-enforced), non-root, index opened at startup. CI builds and starts the image with no key on relevant PRs. Deploy from GitHub Actions (Workload Identity Federation) deferred. | Checked free tiers (2026-11-02): Cloud Run's free tier (2M requests/month + CPU/memory time, request-based billing, nothing charged while idle) fits a demo and runs the same container; Render's free tier sleeps after 15 min (~1 min wake), has 512 MB and may suspend services that call external APIs heavily; Fly.io has no free tier for new accounts; Hugging Face Docker Spaces terms for free accounts were unclear. Cost: a billing account is required; image storage above Artifact Registry's free 0.5 GB costs cents. | Decided (owner, 2026-11-02) |
 | D15 | **Pin the generator model** (`gemini-3.8-flash`) instead of the `gemini-flash-latest` alias. Cached answers no longer expire for a pinned model (14 days only for an alias). Upgrades are deliberate: evaluate the new model via `INSURANCE_RAG_GEN_MODEL`, compare reports, then change the default (README "Upgrading the model"). A weekly CI job (M2) lists the models the key can use and opens an issue when the pinned model disappears or a newer Flash appears. | Every reported number describes one model; the guardrail's model-refusal layer depends on the generator's behaviour, so a silent switch could change it unmeasured; an alias also forced re-asking all answers every 14 days, wiping judge and human scores. Cost: the app breaks if the pinned model is retired before it is bumped, hence the weekly check. | Decided (owner, 2026-10-28) |
 | D14 | Judge design: one call per item scores **faithfulness** (vs the retrieved passages) and **correctness** (vs the reference answer) on a **0–2** scale; only answered answer/defer items with the right behaviour are judged; prompt is a versioned file whose name + hash are in the cache key; **separate `make judge` step** with its own cache; "strict pass" = judge-free pass + both scores 2; human check on ~20 stratified items with exact / within-one / quadratic-weighted kappa, counted only for the answer the human scored (answer hash). | Few levels give steadier judge scores and an easier human sheet; separate steps keep the generator's and judge's quotas and caches independent; hashes make every score traceable and stale human scores visible. | Decided (owner, 2026-10-28) |
@@ -437,7 +403,7 @@ README traces to a committed report.
   config wins.
 - Version prompts (generation and judge) alongside configs.
 
-### M4. Containerized cloud deployment — `[~]` (merged as PR #30 and deployed; `/ask` check and Streamlit connection pending)
+### M4. Containerized cloud deployment — `[x]` (PRs #30-#32 and the closing PR; deployed 2026-11-03)
 
 - [x] `Dockerfile` (Python 3.11 slim, non-root, `$PORT`, healthcheck, proxy
   headers), `.dockerignore` (allowlist), `.gcloudignore`,
@@ -454,11 +420,13 @@ README traces to a committed report.
   ops, troubleshooting); `make docker-build`, `docker-run`, `deploy`.
 - [x] Offline tests (12); README "Deployment" section; api/README.
 - [x] Owner: merged (PR #30); deployed (DEPLOY.md 1-4); `/health` OK.
-- [~] `/ask` check: timed out on 2026-11-02 (see "Where we are"); fail-fast +
-  request logging fix on branch `fix/api-timeouts`; retest after the quota
-  reset.
-- [ ] Connect the Streamlit app (step 6); confirm the live demo answers
-  through the API.
+- [x] `/ask` check: first attempts failed on Gemini 503 "high demand";
+  fail-fast + request logging (PR #31) and the serving fallback (PR #32,
+  D19); then answered correctly in 5.4 s (main model, page 10).
+- [x] Streamlit app connected (API URL + token in its secrets): the demo
+  shows "Demo served by API" and answers through Cloud Run.
+- [x] API root `/` returns a short service description instead of 404 (the
+  app's "Demo served by API" link points there).
 - Upload mode per D3 (stays in the Streamlit app).
 
 ### M5. Monitoring (privacy-safe) — `[ ]`
@@ -647,3 +615,9 @@ sections. 2–3 resume bullets, describing only what was built.
   (`gemini-3.6-flash`), one attempt on the main model then the fallback,
   `model` / `fallback_used` in API answers, logs and the app, evaluation
   untouched, model check + smoke-eval `gen_model` input, 8 offline tests.
+- **2026-11-03 — PR #32 (merged) and M4 done.** Fallback merged (with a
+  Windows encoding fix for one test) and deployed; `/health` shows the
+  fallback; `/ask` answered in 5.4 s with the main model. Streamlit app
+  connected to the API (secrets added). Smoke-eval against the fallback:
+  10/12, guardrail held, two over-refusals (D19); owner kept the fallback.
+  Closing PR: API root page, PLAN.md. **M4 done.** Next: M1d data, then M3.
