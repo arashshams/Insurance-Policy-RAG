@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-11-03 (M4 done: API on Cloud Run, live app connected; see "Where we are")
+Last updated: 2026-11-03 (M4 done and closed with PR #33; paused, see "Where we are")
 
 ---
 
@@ -33,7 +33,10 @@ Last updated: 2026-11-03 (M4 done: API on Cloud Run, live app connected; see "Wh
   returned 503 "high demand" on two days, which led to the API fail-fast fix
   (PR #31) and the serving fallback model (PR #32, D19). The fallback
   (`gemini-3.6-flash`) passed the guardrail on the smoke subset but
-  over-refused two answerable items (see D19); kept on purpose.
+  over-refused two answerable items (see D19); kept on purpose. Closing PR
+  #33 (API root page) is merged and deployed; the app's "Demo served by
+  API" link now shows the service description. The owner paused the work
+  here.
 - **Next items (propose plans first):**
   1. M1d (committed v2 report + failure analysis) once the owner's daily
      `make eval` / `make judge` runs cover all items, then the hand-scoring
@@ -403,7 +406,7 @@ README traces to a committed report.
   config wins.
 - Version prompts (generation and judge) alongside configs.
 
-### M4. Containerized cloud deployment — `[x]` (PRs #30-#32 and the closing PR; deployed 2026-11-03)
+### M4. Containerized cloud deployment — `[x]` (PRs #30-#33; deployed 2026-11-03)
 
 - [x] `Dockerfile` (Python 3.11 slim, non-root, `$PORT`, healthcheck, proxy
   headers), `.dockerignore` (allowlist), `.gcloudignore`,
@@ -621,3 +624,7 @@ sections. 2–3 resume bullets, describing only what was built.
   connected to the API (secrets added). Smoke-eval against the fallback:
   10/12, guardrail held, two over-refusals (D19); owner kept the fallback.
   Closing PR: API root page, PLAN.md. **M4 done.** Next: M1d data, then M3.
+- **2026-11-03 — PR #33 (merged and deployed).** API root page live; the
+  link in the app works. **M4 closed. Paused.** Next when the owner is
+  back: M1d once the eval data is in (`make eval` / `make judge`), then M3
+  (propose the plan first).
