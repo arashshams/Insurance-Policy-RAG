@@ -128,7 +128,8 @@ curl "$URL/health"
 ```
 
 Expect `"status": "ok"`, `"index_loaded": true`, `"api_key_present": true`,
-`"auth_required": true`. Then one real question (1 Gemini call):
+`"auth_required": true`, `"model_fallback": "gemini-3.6-flash"`. Then one
+real question (1-2 Gemini calls):
 
 ```bash
 TOKEN=$(gcloud secrets versions access latest --secret=insurance-rag-api-token)
@@ -187,7 +188,12 @@ period takes a few extra seconds while the service wakes up.
   allows 20 generation requests per day per project and model, shared with
   anything else using that key. It resets at midnight Pacific; the message
   says when.
-- **`/ask` returns 503 "temporarily unavailable":** Gemini didn't respond
+- **An answer says `"fallback_used": true`:** the main model
+  (`gemini-3.8-flash`) was unavailable (overloaded, rate-limited or out of
+  daily quota) and the backup model (`gemini-3.6-flash`) answered (PLAN.md
+  D19). The app labels these answers. Disable with
+  `INSURANCE_RAG_GEN_FALLBACK_MODEL=""` (`--update-env-vars` on deploy).
+- **`/ask` returns 503 "temporarily unavailable":** neither model answered
   (the container gives each call 20 s and one retry, so this comes back in
   under a minute instead of hitting Cloud Run's 120 s limit). The service's
   Logs show one `ask failed ... error=... cause=...` line per failed

@@ -12,9 +12,11 @@ from __future__ import annotations
 
 from typing import Any
 
-# The deployed API scales to zero when idle; the first request after a quiet
-# period starts a new instance, which takes a few seconds. 60 s leaves room.
-TIMEOUT_S = 60
+# The deployed API scales to zero when idle (the first request after a quiet
+# period starts a new instance, a few seconds), and with the fallback model
+# (PLAN.md D19) a request can make two generation attempts. 90 s covers both
+# and stays inside Cloud Run's 120 s request timeout.
+TIMEOUT_S = 90
 
 UNREACHABLE = ("The answer service isn't reachable right now. It may be starting up "
                "after a quiet period; please try again in a moment.")
@@ -70,4 +72,6 @@ def ask(api_url: str, question: str, token: str = "", timeout: float = TIMEOUT_S
         ],
         "abstained": bool(data.get("abstained")),
         "citations_verified": bool(data.get("citations_verified")),
+        "model_used": data.get("model"),
+        "fallback_used": bool(data.get("fallback_used")),
     }

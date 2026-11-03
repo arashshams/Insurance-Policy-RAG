@@ -128,7 +128,8 @@ def test_client_normalizes_a_good_reply(api_client):
                            "retrieved": [{"id": "doc_1", "page": 7, "score": 0.3, "text": "t"}]})
     r = api_client.ask("https://api.example/", "Is physio covered?", token="tok", post=post)
     assert calls[0][0] == "https://api.example/ask"
-    assert calls[0][2] == {"Authorization": "Bearer tok"} and calls[0][3] == 60
+    assert calls[0][2] == {"Authorization": "Bearer tok"}
+    assert calls[0][3] == api_client.TIMEOUT_S == 90
     assert r["answer"] == "Covered." and r["retrieved"][0]["metadata"] == {"page": 7}
 
 
@@ -197,3 +198,32 @@ def test_ask_logs_outcome_and_error_type_but_never_the_question(api, monkeypatch
     ok = [rec.getMessage() for rec in caplog.records if "ask ok" in rec.getMessage()]
     assert ok and "generation_calls=1" in ok[0]
     assert all(question not in rec.getMessage() for rec in caplog.records)
+
+
+def test_api_uses_the_fallback_and_reports_which_model_answered(api, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    seen = {}
+
+    def answered_by_backup(collection, question, k=4, **kw):
+        seen.update(kw)
+        return {"answer": "Covered.", "pages": [7], "abstained": False,
+                "citations_verified": True, "retrieved": [], "generation_calls": 1,
+                "model_used": "gemini-3.6-flash", "fallback_used": True,
+                "fallback_reason": "InternalServerError"}
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    monkeypatch.delenv("INSURANCE_RAG_API_TOKEN", raising=False)
+    monkeypatch.setattr(api, "_get_collection", lambda: object())
+    monkeypatch.setattr(api, "answer_question_detailed", answered_by_backup)
+    client = TestClient(api.app)
+    body = client.post("/ask", json={"question": "q"}).json()
+    assert seen["fallback_model"] == api.GEN_FALLBACK_MODEL
+    assert body["model"] == "gemini-3.6-flash" and body["fallback_used"] is True
+    assert client.get("/health").json()["model_fallback"] == api.GEN_FALLBACK_MODEL
+
+
+def test_client_passes_through_which_model_answered(api_client):
+    reply = {"answer": "a", "pages": [], "abstained": False, "citations_verified": False,
+             "retrieved": [], "model": "gemini-3.6-flash", "fallback_used": True}
+    r = api_client.ask("https://api.example", "q", post=lambda *a, **k: _Resp(200, reply))
+    assert r["model_used"] == "gemini-3.6-flash" and r["fallback_used"] is True

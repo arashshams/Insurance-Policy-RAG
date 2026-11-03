@@ -112,6 +112,7 @@ EXAMPLE_QUESTIONS = [
 
 from src import guardrails
 from src.rag_pipeline import (
+    GEN_FALLBACK_MODEL,
     DISTANCE_THRESHOLD,
     MAX_UPLOAD_CHUNKS,
     MAX_UPLOAD_MB,
@@ -294,7 +295,8 @@ def _render_answer(question: str, collection, use_api: bool = False,
                 result = _answer_via_api(question)
             else:
                 result = answer_question_detailed(
-                    collection, question, threshold=threshold
+                    collection, question, threshold=threshold,
+                    fallback_model=GEN_FALLBACK_MODEL or None,
                 )
     except Exception as exc:  # noqa: BLE001 - surface API/pipeline errors
         st.error(f"Could not get an answer: {exc}")
@@ -311,6 +313,11 @@ def _render_answer(question: str, collection, use_api: bool = False,
     retrieved = result["retrieved"]
     st.markdown("### Answer")
     st.write(result["answer"])
+    if result.get("fallback_used"):
+        st.caption(
+            f"Answered by the backup model ({result.get('model_used')}) because the "
+            "main model is busy right now."
+        )
     if result["pages"]:
         cited = ", ".join(str(p) for p in result["pages"])
         if result.get("citations_verified"):

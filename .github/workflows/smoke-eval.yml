@@ -19,6 +19,11 @@ on:
       - "requirements.txt"
       - ".github/workflows/smoke-eval.yml"
   workflow_dispatch:
+    inputs:
+      gen_model:
+        description: "Generator to evaluate instead of the pinned one (e.g. the fallback model gemini-3.6-flash)"
+        required: false
+        default: ""
 
 concurrency:
   group: smoke-eval-${{ github.event.pull_request.number || github.ref }}
@@ -60,8 +65,13 @@ jobs:
       - name: Smoke eval with gates
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEN_MODEL_OVERRIDE: ${{ inputs.gen_model }}
         run: |
           set +e
+          if [ -n "$GEN_MODEL_OVERRIDE" ]; then
+            export INSURANCE_RAG_GEN_MODEL="$GEN_MODEL_OVERRIDE"
+            echo "Evaluating generator: $GEN_MODEL_OVERRIDE"
+          fi
           python -m src.evaluate --subset eval/smoke_v2.txt --gates \
             --max-calls 15 --sleep 6 \
             --results "$RUNNER_TEMP/smoke_results.json" \

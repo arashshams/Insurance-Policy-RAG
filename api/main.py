@@ -51,6 +51,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src import guardrails  # noqa: E402 - after sys.path setup
 from src.rag_pipeline import (  # noqa: E402 - after sys.path setup
+    GEN_FALLBACK_MODEL,
     GEN_MODEL,
     K_DEFAULT,
     GeminiQuotaExhaustedError,
@@ -187,6 +188,16 @@ class AskResponse(BaseModel):
         ),
     )
     retrieved: list[RetrievedChunk]
+    model: str | None = Field(
+        None, description="Model that wrote the answer (None if no generation ran)."
+    )
+    fallback_used: bool = Field(
+        False,
+        description=(
+            "True when the main model was unavailable (overloaded, rate-limited or "
+            "out of quota) and the fallback model answered."
+        ),
+    )
 
 
 # --- Endpoints --------------------------------------------------------------
@@ -200,6 +211,7 @@ def health() -> dict[str, Any]:
         "api_key_present": _api_key_present(),
         "auth_required": bool(_api_token()),
         "model_default": GEN_MODEL,
+        "model_fallback": GEN_FALLBACK_MODEL or None,
     }
 
 
@@ -233,7 +245,8 @@ def ask(
                     rid, status, type(exc).__name__, cause, time.monotonic() - started)
 
     try:
-        result = answer_question_detailed(collection, req.question, k=req.k)
+        result = answer_question_detailed(collection, req.question, k=req.k,
+                                          fallback_model=GEN_FALLBACK_MODEL or None)
     except GeminiQuotaExhaustedError as exc:
         # Daily quota used up: tell the client when it resets, not "in a minute".
         _log_failure(503, exc)
@@ -252,9 +265,12 @@ def ask(
         _log_failure(502, exc)
         raise HTTPException(status_code=502, detail=f"Pipeline error: {exc}") from exc
 
-    log.info("ask ok rid=%s seconds=%.1f abstained=%s retrieved=%d generation_calls=%s",
+    log.info("ask ok rid=%s seconds=%.1f abstained=%s retrieved=%d generation_calls=%s "
+             "model=%s fallback=%s%s",
              rid, time.monotonic() - started, result["abstained"],
-             len(result["retrieved"]), result.get("generation_calls", "-"))
+             len(result["retrieved"]), result.get("generation_calls", "-"),
+             result.get("model_used") or "-", bool(result.get("fallback_used")),
+             f" reason={result['fallback_reason']}" if result.get("fallback_used") else "")
 
     chunks = [
         RetrievedChunk(
@@ -272,4 +288,6 @@ def ask(
         abstained=result["abstained"],
         citations_verified=result["citations_verified"],
         retrieved=chunks,
+        model=result.get("model_used"),
+        fallback_used=bool(result.get("fallback_used")),
     )

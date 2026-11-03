@@ -1,7 +1,8 @@
 """
 model_check.py — is the pinned model still there, and is there a newer one?
 
-The generator and judge models are pinned (PLAN.md D4, D15), so nothing moves
+The generator, its serving fallback and the judge are pinned (PLAN.md D4,
+D15, D19), so nothing moves
 on its own. This check, run weekly by .github/workflows/model-check.yml, lists
 the models the API key can use and reports:
   * ACTION NEEDED  the pinned generator or judge model is no longer listed
@@ -110,6 +111,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     pinned = {"generator": rp.GEN_MODEL, "judge": jd.JUDGE_MODEL}
+    if rp.GEN_FALLBACK_MODEL:
+        pinned["fallback"] = rp.GEN_FALLBACK_MODEL
     try:
         available = list_models(key)
     except Exception as exc:  # noqa: BLE001 - network/API errors: report, don't guess
