@@ -398,7 +398,7 @@ def test_eval_cache_expires(monkeypatch):
 
 
 # --- API ------------------------------------------------------------------------
-def _fake_detailed(c, q, k=4):
+def _fake_detailed(c, q, k=4, **_):
     if "France" in q:
         return {"answer": "I don't know", "pages": [], "retrieved": [], "abstained": True,
                 "citations_verified": False}
@@ -693,3 +693,77 @@ def test_cached_answers_expire_only_for_a_moving_alias():
 def test_health_reports_the_configured_model(api_client):
     _, client = api_client
     assert client.get("/health").json()["model_default"] == rp.GEN_MODEL
+
+
+# --- serving fallback model (PLAN.md D19) ---------------------------------------------
+def _model_client(behaviour):
+    """Fake client whose reply depends on the requested model: behaviour[model]
+    is an exception to raise or the answer text. Returns (client, calls)."""
+    calls = []
+
+    def create(**kw):
+        calls.append(kw["model"])
+        b = behaviour[kw["model"]]
+        if isinstance(b, Exception):
+            raise b
+        return SimpleNamespace(model=kw["model"], choices=[SimpleNamespace(
+            finish_reason="stop", message=SimpleNamespace(content=b))])
+    return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))), calls
+
+
+def test_fallback_answers_when_the_main_model_is_overloaded(monkeypatch, fake_embeddings,
+                                                           no_sleep):
+    import openai
+
+    client, calls = _model_client({"main": _openai_error(openai.InternalServerError, 503),
+                                   "backup": "Covered [doc_0]."})
+    monkeypatch.setattr(rp, "get_client", lambda: client)
+    r = rp.answer_question_detailed(_FakeCollection(0.2), "q", model_name="main",
+                                    fallback_model="backup")
+    assert calls == ["main", "backup"]  # one attempt on the main model, then the backup
+    assert r["answer"] == "Covered." and r["model_used"] == "backup"
+    assert r["fallback_used"] and r["fallback_reason"] == "InternalServerError"
+    assert r["generation_calls"] == 1
+
+
+def test_fallback_also_covers_the_main_models_daily_quota(monkeypatch, fake_embeddings, no_sleep):
+    client, calls = _model_client({"main": _quota_error(), "backup": "Covered [doc_0]."})
+    monkeypatch.setattr(rp, "get_client", lambda: client)
+    r = rp.answer_question_detailed(_FakeCollection(0.2), "q", model_name="main",
+                                    fallback_model="backup")
+    assert calls == ["main", "backup"] and r["fallback_reason"] == "RateLimitError"
+
+
+def test_healthy_main_model_never_uses_the_fallback(monkeypatch, fake_embeddings):
+    client, calls = _model_client({"main": "Covered [doc_0].", "backup": "x"})
+    monkeypatch.setattr(rp, "get_client", lambda: client)
+    r = rp.answer_question_detailed(_FakeCollection(0.2), "q", model_name="main",
+                                    fallback_model="backup")
+    assert calls == ["main"] and r["model_used"] == "main" and not r["fallback_used"]
+
+
+def test_without_a_fallback_or_when_both_fail_the_error_surfaces(monkeypatch, fake_embeddings,
+                                                                 no_sleep):
+    import openai
+
+    monkeypatch.setattr(rp, "QUERY_MAX_RETRIES", 1)
+    down = _openai_error(openai.InternalServerError, 503)
+    client, calls = _model_client({"main": down, "backup": down})
+    monkeypatch.setattr(rp, "get_client", lambda: client)
+    with pytest.raises(rp.GeminiUnavailableError):
+        rp.answer_question_detailed(_FakeCollection(0.2), "q", model_name="main")
+    assert calls == ["main", "main"]  # normal retries, no fallback
+    calls.clear()
+    with pytest.raises(rp.GeminiUnavailableError):
+        rp.answer_question_detailed(_FakeCollection(0.2), "q", model_name="main",
+                                    fallback_model="backup")
+    assert calls == ["main", "backup", "backup"]
+
+
+def test_the_evaluation_never_falls_back():
+    import inspect
+
+    assert inspect.signature(rp.answer_question_detailed).parameters[
+        "fallback_model"].default is None
+    for name in ("evaluate.py", "judge.py"):
+        assert "fallback_model" not in (REPO_ROOT / "src" / name).read_text(encoding="utf-8")

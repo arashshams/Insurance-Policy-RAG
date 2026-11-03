@@ -52,7 +52,7 @@ The whole pipeline is consolidated into a single importable module, **`src/rag_p
 | Setting | Value |
 |---|---|
 | Embedding model | `gemini-embedding-001` (3072-dim) |
-| Generation model | `gemini-3.8-flash`, pinned (temperature 0.0) |
+| Generation model | `gemini-3.8-flash`, pinned (temperature 0.0); serving fallback `gemini-3.6-flash` when it is unavailable |
 | Vector store | ChromaDB, cosine space, collection `insurance_policy_cvdb` |
 | Chunking | `cl100k_base` tokenizer, size 800, overlap 128 |
 | Retrieval `k` | 4 (`K_DEFAULT`) |
@@ -263,6 +263,7 @@ visitor -> Streamlit app (Streamlit Community Cloud)
 
 - **Container:** `Dockerfile` (Python 3.11 slim, non-root user, only `src/`, `api/` and the demo index; dependencies from `requirements-api.txt`). The index is opened at startup; `/health` reports whether it loaded. Secrets come from the environment, never the image.
 - **Cloud Run settings:** scales to zero when idle and to at most one instance, 1 GiB memory; the Gemini key and the API token come from Secret Manager. At demo traffic this stays within Cloud Run's free tier.
+- **Backup model:** when `gemini-3.8-flash` is overloaded, rate-limited or out of daily quota, the API and the app answer with `gemini-3.6-flash` instead, and say so (`"fallback_used": true` in the API reply, a note under the answer in the app). The evaluation always measures the main model; the backup is checked with the smoke eval (`gen_model` input) and watched by the weekly model check.
 - **CI:** the `docker` workflow builds the image and starts it without a key on every relevant PR, checking `/health` and that `/ask` fails cleanly, so a broken image never reaches a deploy.
 - **Uploads stay in the app** (decision D3): the deployed API serves only the bundled demo policy, because uploaded documents are private and per-session, and cloud instances come and go.
 

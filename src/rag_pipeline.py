@@ -57,6 +57,14 @@ EMBED_MODEL = os.environ.get("INSURANCE_RAG_EMBED_MODEL", "gemini-embedding-001"
 GEN_MODEL = os.environ.get("INSURANCE_RAG_GEN_MODEL", "gemini-3.8-flash")
 
 
+# Fallback model for serving (PLAN.md D19): when the generator is overloaded
+# (Gemini 503 "high demand"), rate-limited or out of daily quota, the API and
+# the app ask this model instead, so the demo keeps answering. Pinned too, and
+# reported with every answer ("model_used", "fallback_used"). The evaluation
+# never falls back: it measures GEN_MODEL only. Set to "" to disable.
+GEN_FALLBACK_MODEL = os.environ.get("INSURANCE_RAG_GEN_FALLBACK_MODEL", "gemini-3.6-flash")
+
+
 def is_moving_alias(model: str) -> bool:
     """True for names like "gemini-flash-latest" whose model can change."""
     return "latest" in (model or "").lower()
@@ -222,15 +230,17 @@ def _humanize_seconds(seconds: float | None) -> str:
     return f"in about {max(1, round(seconds / 60))} minutes"
 
 
-def _call_with_backoff(fn, what: str):
+def _call_with_backoff(fn, what: str, max_retries: int | None = None):
     """Call fn(), retrying transient Gemini errors with exponential backoff.
 
     Retries up to QUERY_MAX_RETRIES times, sleeping QUERY_INITIAL_SLEEP
     seconds before the first retry and doubling each time. Raises
     GeminiUnavailableError (chained to the last error) if it never succeeds.
     A 429 for a quota that resets hours later (daily limit) is not retried:
-    it raises GeminiQuotaExhaustedError straight away.
+    it raises GeminiQuotaExhaustedError straight away. `max_retries` overrides
+    QUERY_MAX_RETRIES for one call (e.g. 0 when a fallback model will retry).
     """
+    limit = QUERY_MAX_RETRIES if max_retries is None else max_retries
     retries = 0
     sleep_time = QUERY_INITIAL_SLEEP
     while True:
@@ -247,11 +257,11 @@ def _call_with_backoff(fn, what: str):
                         retry_after_s=delay,
                     ) from exc
             retries += 1
-            if retries > QUERY_MAX_RETRIES:
+            if retries > limit:
                 kind = ("rate-limited" if isinstance(exc, RateLimitError)
                         else "temporarily unavailable")
                 raise GeminiUnavailableError(
-                    f"Gemini is {kind} ({what} failed after {QUERY_MAX_RETRIES} "
+                    f"Gemini is {kind} ({what} failed after {limit} "
                     "retries). Please try again in a few minutes."
                 ) from exc
             time.sleep(sleep_time)
@@ -680,7 +690,8 @@ def _pages_of(chunks) -> list:
 
 def answer_question_detailed(collection, question, k=K_DEFAULT,
                              model_name=GEN_MODEL,
-                             threshold=DISTANCE_THRESHOLD) -> dict:
+                             threshold=DISTANCE_THRESHOLD,
+                             fallback_model: str | None = None) -> dict:
     """Retrieve grounded context, generate an answer, and report how it was made.
 
     Returns a dict:
@@ -703,11 +714,20 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
       model_resolved      model name the API reported back, if any (Gemini's
                           OpenAI-compatible endpoint echoes the requested name)
       finish_reason       generation finish reason, if generation ran
+      model_used          the model that wrote the answer (None if no
+                          generation ran): model_name, or fallback_model
+      fallback_used       True when model_name failed (overloaded, rate-
+                          limited or out of quota) and fallback_model answered
+      fallback_reason     the primary model's error type when it did
       generation_calls    generation requests made (0 if the threshold
                           short-circuited, 2 if a truncated answer was retried);
                           lets the evaluation budget the daily quota
     If nothing passes the threshold, short-circuits to IDK_ANSWER without
     calling the LLM.
+
+    fallback_model (serving only; the evaluation leaves it None): when given
+    and different from model_name, the primary model gets a single attempt
+    and, if Gemini is unavailable for it, the fallback model answers instead.
     """
     all_hits = _query_chunks(collection, question, k=k)
     retrieved = _apply_threshold(all_hits, threshold)
@@ -730,6 +750,9 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
         "model_resolved": None,
         "finish_reason": None,
         "generation_calls": 0,
+        "model_used": None,
+        "fallback_used": False,
+        "fallback_reason": None,
     }
 
     # Short-circuit: no grounded context -> "I don't know" (no LLM call).
@@ -748,10 +771,10 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
     client = get_client()
     extra_body = {"reasoning_effort": GEN_REASONING_EFFORT} if GEN_REASONING_EFFORT else None
 
-    def _generate(max_tokens):
+    def _generate(max_tokens, model, max_retries=None):
         """One generation attempt, retrying transient errors with backoff."""
         kwargs = dict(
-            model=model_name,
+            model=model,
             messages=prompt_messages,
             temperature=0.0,
             max_tokens=max_tokens,
@@ -759,12 +782,27 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
         if extra_body:
             kwargs["extra_body"] = extra_body
         response = _call_with_backoff(
-            lambda: client.chat.completions.create(**kwargs), "generation"
+            lambda: client.chat.completions.create(**kwargs), "generation",
+            max_retries=max_retries,
         )
         result["generation_calls"] += 1
         return response
 
-    response = _generate(GEN_MAX_TOKENS)
+    use_fallback = bool(fallback_model) and fallback_model != model_name
+    model_used = model_name
+    try:
+        # With a fallback, the primary model gets one attempt: the fallback
+        # is the retry, which keeps the whole request well inside the
+        # serving timeouts.
+        response = _generate(GEN_MAX_TOKENS, model_name, 0 if use_fallback else None)
+    except GeminiUnavailableError as exc:
+        if not use_fallback:
+            raise
+        result["fallback_used"] = True
+        result["fallback_reason"] = type(exc.__cause__ or exc).__name__
+        model_used = fallback_model
+        response = _generate(GEN_MAX_TOKENS, model_used)
+    result["model_used"] = model_used
     finish_reason = getattr(response.choices[0], "finish_reason", None)
 
     # A response can still get cut off mid-sentence if the model "thinks"
@@ -772,7 +810,7 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
     # with double the budget recovers the common case instead of the app
     # silently shipping a truncated answer.
     if finish_reason in ("length", "MAX_TOKENS") and GEN_MAX_TOKENS < 4096:
-        response = _generate(GEN_MAX_TOKENS * 2)
+        response = _generate(GEN_MAX_TOKENS * 2, model_used)
         finish_reason = getattr(response.choices[0], "finish_reason", None)
 
     result["finish_reason"] = finish_reason
