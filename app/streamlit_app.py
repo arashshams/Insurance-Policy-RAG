@@ -458,8 +458,6 @@ def render_monitoring_mode() -> None:
     Totals and per-day series only: no questions, answers or visitors are
     stored or shown. Covers demo questions answered by the API; uploads run
     in this app and are not recorded at all."""
-    import pandas as pd
-
     st.subheader("How the demo is doing")
     st.caption(
         "Aggregated numbers from the deployed API. Nothing about individual "
@@ -498,22 +496,23 @@ def render_monitoring_mode() -> None:
         f"{o['idk_by_model']} by the model."
     )
 
-    df = pd.DataFrame(data["by_day"]).set_index("day")
+    import dashboard
+
+    df = dashboard.daily_frame(data)
+    charts = dashboard.chart_frames(data)
     st.markdown("**Questions per day**")
-    st.bar_chart(df[["requests"]].rename(columns={"requests": "questions"}))
+    st.bar_chart(charts["questions"])
     st.markdown("**\"I don't know\" rate per day**")
-    st.line_chart(df[["idk_rate"]].rename(columns={"idk_rate": "\"I don't know\" rate"}))
+    st.line_chart(charts["idk_rate"])
     st.markdown("**Response time per day (seconds)**")
-    st.line_chart(df[["latency_p50_s", "latency_p95_s"]].rename(
-        columns={"latency_p50_s": "median", "latency_p95_s": "95th percentile"}))
+    st.line_chart(charts["latency"])
     st.markdown("**Closest-passage distance per day** (lower = closer to the policy)")
-    dist = df[["nearest_distance_median"]].rename(
-        columns={"nearest_distance_median": "median closest distance"})
-    if data.get("threshold") is not None:
-        dist[f"relevance threshold ({data['threshold']})"] = data["threshold"]
-    st.line_chart(dist)
-    st.caption("If people start asking about things the policy doesn't cover, the "
-               "distance rises toward the threshold and the \"I don't know\" rate goes up.")
+    st.line_chart(charts["distance"])
+    st.caption(
+        (f"The flat line is the relevance threshold ({data['threshold']}). "
+         if data.get("threshold") is not None else "")
+        + "If people start asking about things the policy doesn't cover, the "
+        "distance rises toward the threshold and the \"I don't know\" rate goes up.")
     with st.expander("Table view"):
         st.dataframe(df, use_container_width=True)
     if data.get("errors"):
