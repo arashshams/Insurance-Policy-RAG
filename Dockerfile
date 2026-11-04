@@ -28,10 +28,13 @@ USER appuser
 # Fail fast on a stuck Gemini call: at most 20 s per attempt and one retry
 # (about 42 s per call in the worst case), so the API answers with a clear
 # 503 well before Cloud Run's request timeout (120 s) and the app's (60 s).
+# With the fallback model, the main model's single attempt gets 8 s before the
+# backup answers (PLAN.md D19): outages cost ~10 s per answer instead of ~20.
 ENV INSURANCE_RAG_ROOT=/srv \
     PORT=8080 \
     INSURANCE_RAG_REQUEST_TIMEOUT=20 \
-    INSURANCE_RAG_MAX_RETRIES=1
+    INSURANCE_RAG_MAX_RETRIES=1 \
+    INSURANCE_RAG_PRIMARY_TIMEOUT=8
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \

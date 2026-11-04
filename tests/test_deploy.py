@@ -162,6 +162,7 @@ def test_client_explains_http_errors(api_client, status, body, expected):
 def test_container_fails_fast_on_a_stuck_gemini_call():
     df = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "INSURANCE_RAG_REQUEST_TIMEOUT=20" in df and "INSURANCE_RAG_MAX_RETRIES=1" in df
+    assert "INSURANCE_RAG_PRIMARY_TIMEOUT=8" in df  # main model's attempt before the backup
 
 
 def test_ask_logs_one_json_line_with_outcome_but_never_the_question(api, monkeypatch, caplog):
