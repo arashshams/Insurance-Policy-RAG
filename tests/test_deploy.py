@@ -46,6 +46,7 @@ def test_dockerfile_basics():
     assert "${PORT:-8080}" in df  # Cloud Run sets PORT
     assert "COPY --chown=appuser:appuser app/demo_index/" in df
     assert "GEMINI_API_KEY" not in df  # secrets come from the environment only
+    assert "--no-access-log" in df  # uvicorn's access log would print visitor IPs
 
 
 def test_docker_context_allowlist_includes_what_the_image_copies():
@@ -163,41 +164,54 @@ def test_container_fails_fast_on_a_stuck_gemini_call():
     assert "INSURANCE_RAG_REQUEST_TIMEOUT=20" in df and "INSURANCE_RAG_MAX_RETRIES=1" in df
 
 
-def test_ask_logs_outcome_and_error_type_but_never_the_question(api, monkeypatch, caplog):
+def test_ask_logs_one_json_line_with_outcome_but_never_the_question(api, monkeypatch, caplog):
+    import json
     import logging
 
     from fastapi.testclient import TestClient
 
+    from src import monitoring
     from src import rag_pipeline as rp
 
     monkeypatch.setenv("GEMINI_API_KEY", "test")
     monkeypatch.delenv("INSURANCE_RAG_API_TOKEN", raising=False)
     monkeypatch.setattr(api, "_get_collection", lambda: object())
+    monkeypatch.setattr(monitoring, "get_store", lambda: None)
     question = "Is my secret condition covered?"
+    # The request log doesn't propagate to the root logger (it prints bare
+    # JSON lines), so capture it directly.
+    api.request_log.addHandler(caplog.handler)
+    try:
+        def stuck(*a, **k):
+            try:
+                raise TimeoutError("gemini did not answer")
+            except TimeoutError as exc:
+                raise rp.GeminiUnavailableError("Gemini is temporarily unavailable") from exc
+        monkeypatch.setattr(api, "answer_question_detailed", stuck)
+        client = TestClient(api.app)
+        with caplog.at_level(logging.INFO):
+            r = client.post("/ask", json={"question": question},
+                            headers={"X-Request-ID": "rid-1"})
+        assert r.status_code == 503
+        line = json.loads(next(rec.getMessage() for rec in caplog.records
+                               if "ask failed" in rec.getMessage()))
+        assert line["severity"] == "WARNING" and line["rid"] == "rid-1"
+        assert line["error"] == "GeminiUnavailableError" and line["cause"] == "TimeoutError"
+        assert line["status"] == 503
 
-    def stuck(*a, **k):
-        try:
-            raise TimeoutError("gemini did not answer")
-        except TimeoutError as exc:
-            raise rp.GeminiUnavailableError("Gemini is temporarily unavailable") from exc
-    monkeypatch.setattr(api, "answer_question_detailed", stuck)
-    client = TestClient(api.app)
-    with caplog.at_level(logging.INFO, logger="insurance_rag.api"):
-        r = client.post("/ask", json={"question": question}, headers={"X-Request-ID": "rid-1"})
-    assert r.status_code == 503
-    line = next(rec.getMessage() for rec in caplog.records if "ask failed" in rec.getMessage())
-    assert "rid=rid-1" in line and "error=GeminiUnavailableError" in line
-    assert "cause=TimeoutError" in line and "status=503" in line
-
-    monkeypatch.setattr(api, "answer_question_detailed", lambda *a, **k: {
-        "answer": "Covered.", "pages": [7], "abstained": False, "citations_verified": True,
-        "retrieved": [], "generation_calls": 1})
-    caplog.clear()
-    with caplog.at_level(logging.INFO, logger="insurance_rag.api"):
-        assert client.post("/ask", json={"question": question}).status_code == 200
-    ok = [rec.getMessage() for rec in caplog.records if "ask ok" in rec.getMessage()]
-    assert ok and "generation_calls=1" in ok[0]
-    assert all(question not in rec.getMessage() for rec in caplog.records)
+        monkeypatch.setattr(api, "answer_question_detailed", lambda *a, **k: {
+            "answer": "Covered.", "pages": [7], "abstained": False, "citations_verified": True,
+            "retrieved": [], "generation_calls": 1})
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            assert client.post("/ask", json={"question": question}).status_code == 200
+        ok = [json.loads(rec.getMessage()) for rec in caplog.records
+              if "ask ok" in rec.getMessage()]
+        assert ok and ok[0]["generation_calls"] == 1 and ok[0]["severity"] == "INFO"
+        assert all(question not in rec.getMessage() and "Covered." not in rec.getMessage()
+                   for rec in caplog.records)
+    finally:
+        api.request_log.removeHandler(caplog.handler)
 
 
 def test_api_uses_the_fallback_and_reports_which_model_answered(api, monkeypatch):

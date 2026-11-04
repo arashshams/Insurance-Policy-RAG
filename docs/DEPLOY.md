@@ -155,6 +155,42 @@ Save; the app restarts. The demo page now shows "Demo served by API: ..." and
 demo questions are answered by Cloud Run. The first question after a quiet
 period takes a few extra seconds while the service wakes up.
 
+## 7. Monitoring (Firestore, one-time)
+
+The API stores one small record per question (numbers and labels only: never
+the question, the answer or the visitor's address) in the project's Firestore
+database, and the app's **Monitoring** page charts them (PLAN.md M5). Within
+Firestore's free tier (1 GiB, 20,000 writes and 50,000 reads a day).
+
+1. **Create the database:** Cloud console -> **Firestore** -> **Create
+   database** -> **Firestore in Native mode**, database ID `(default)`,
+   location **us-central1** (Region). Or:
+
+   ```bash
+   gcloud firestore databases create --location=us-central1 --type=firestore-native
+   ```
+
+2. **Let the service write to it:**
+
+   ```bash
+   PROJECT_ID=$(gcloud config get-value project)
+   PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+     --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
+     --role=roles/datastore.user
+   ```
+
+3. **Redeploy** (`make deploy PROJECT=$PROJECT_ID`; the deploy command sets
+   `INSURANCE_RAG_METRICS=firestore`). `/health` then shows
+   `"metrics": "firestore"`.
+4. **Check:** ask one question in the app, then open the **Monitoring** page
+   (left sidebar). Numbers refresh every 5 minutes. With the token, the raw
+   aggregates are also at `GET /stats?days=7`.
+
+Records older than 90 days are deleted by the API itself. To turn monitoring
+off: `gcloud run services update insurance-rag-api --region us-central1
+--update-env-vars INSURANCE_RAG_METRICS=off`.
+
 ---
 
 ## Later
@@ -167,7 +203,9 @@ period takes a few extra seconds while the service wakes up.
   start with it. Secrets used as environment variables are read when an
   instance starts.
 - **Logs:** Cloud console -> Cloud Run -> `insurance-rag-api` -> Logs. Each
-  response carries an `X-Request-ID` header to find its log lines.
+  question logs one structured (JSON) line, so you can filter on its fields,
+  e.g. `jsonPayload.fallback_used=true` or `jsonPayload.error:*`. Each response
+  carries an `X-Request-ID` header (the line's `rid`).
 - **Old images:** every deploy adds an image to `cloud-run-source-deploy`.
   Delete old ones now and then (Artifact Registry in the console) to stay near
   the free storage amount.
@@ -202,6 +240,10 @@ period takes a few extra seconds while the service wakes up.
 - **"upstream request timeout" after 2 minutes:** Cloud Run cut the request
   off. With the current image this shouldn't happen; redeploy (`make deploy`)
   if the service still runs an older image.
+- **Monitoring page says data isn't available / `/stats` returns 503:**
+  the Firestore database doesn't exist yet or the service account lacks
+  `roles/datastore.user` (step 7). Questions are still answered meanwhile;
+  failed metric writes only show as `metrics write failed` log lines.
 - **The app says the answer service isn't reachable:** check the URL in the
   Streamlit secrets (no trailing path) and that `curl "$URL/health"` works.
 - **The app says it isn't authorized:** the token in the Streamlit secrets

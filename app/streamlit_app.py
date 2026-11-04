@@ -187,8 +187,8 @@ with st.expander("How it works"):
 with st.sidebar:
     st.header("Get started")
     mode = st.radio(
-        "Which policy do you want to ask about?",
-        options=("Bundled-policy demo", "Upload my own policy"),
+        "What would you like to do?",
+        options=("Bundled-policy demo", "Upload my own policy", "Monitoring"),
         index=0,
         help=(
             "Try the sample policy to see how it works, or upload your "
@@ -440,8 +440,93 @@ def render_upload_mode() -> None:
     _query_ui(collection, key_prefix="upload", show_examples=False,
               threshold=UPLOAD_DISTANCE_THRESHOLD)
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_stats(days: int) -> dict:
+    """/stats, cached for 5 minutes so page views don't each read the store."""
+    import api_client
+
+    return api_client.stats(API_URL, days=days, token=API_TOKEN)
+
+
+def _pct(x) -> str:
+    return "–" if x is None else f"{x:.0%}"
+
+
+def render_monitoring_mode() -> None:
+    """Public dashboard of the deployed API's aggregated metrics (PLAN.md M5).
+
+    Totals and per-day series only: no questions, answers or visitors are
+    stored or shown. Covers demo questions answered by the API; uploads run
+    in this app and are not recorded at all."""
+    import pandas as pd
+
+    st.subheader("How the demo is doing")
+    st.caption(
+        "Aggregated numbers from the deployed API. Nothing about individual "
+        "questions is stored: no question text, answers or visitor addresses, "
+        "and questions about uploaded PDFs aren't recorded at all."
+    )
+    if not API_URL:
+        st.info("Monitoring needs the deployed API (INSURANCE_RAG_API_URL is not set).")
+        return
+    days = st.radio("Period", (7, 30, 90), index=0, horizontal=True,
+                    format_func=lambda d: f"Last {d} days")
+    try:
+        with st.spinner("Loading monitoring data..."):
+            data = _cached_stats(days)
+    except Exception as exc:  # noqa: BLE001 - show the API's explanation
+        st.error(f"Could not load monitoring data: {exc}")
+        return
+
+    o = data["overall"]
+    if not o["requests"]:
+        st.info("No questions in this period yet.")
+        return
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Questions", o["requests"])
+    c2.metric("\"I don't know\" rate", _pct(o["idk_rate"]),
+              help="Share of answered requests where the policy didn't cover the "
+                   "question: stopped by the relevance threshold or by the model.")
+    c3.metric("Median response", "–" if o["latency_p50_s"] is None
+              else f"{o['latency_p50_s']:.1f} s",
+              help=f"95th percentile: {o['latency_p95_s'] or '–'} s")
+    c4.metric("Errors", _pct(o["error_rate"]),
+              help="Requests that failed, e.g. Gemini unavailable or out of quota.")
+    st.caption(
+        f"Backup model answered {_pct(o['fallback_rate'])} of questions. "
+        f"\"I don't know\": {o['idk_by_threshold']} by the threshold, "
+        f"{o['idk_by_model']} by the model."
+    )
+
+    df = pd.DataFrame(data["by_day"]).set_index("day")
+    st.markdown("**Questions per day**")
+    st.bar_chart(df[["requests"]].rename(columns={"requests": "questions"}))
+    st.markdown("**\"I don't know\" rate per day**")
+    st.line_chart(df[["idk_rate"]].rename(columns={"idk_rate": "\"I don't know\" rate"}))
+    st.markdown("**Response time per day (seconds)**")
+    st.line_chart(df[["latency_p50_s", "latency_p95_s"]].rename(
+        columns={"latency_p50_s": "median", "latency_p95_s": "95th percentile"}))
+    st.markdown("**Closest-passage distance per day** (lower = closer to the policy)")
+    dist = df[["nearest_distance_median"]].rename(
+        columns={"nearest_distance_median": "median closest distance"})
+    if data.get("threshold") is not None:
+        dist[f"relevance threshold ({data['threshold']})"] = data["threshold"]
+    st.line_chart(dist)
+    st.caption("If people start asking about things the policy doesn't cover, the "
+               "distance rises toward the threshold and the \"I don't know\" rate goes up.")
+    with st.expander("Table view"):
+        st.dataframe(df, use_container_width=True)
+    if data.get("errors"):
+        st.markdown("**Errors by type:** " + ", ".join(
+            f"{name} ({count})" for name, count in data["errors"].items()))
+    st.caption(f"Served by {API_URL} · version {data.get('version', '?')} · "
+               "refreshed every 5 minutes.")
+
+
 # --- Mode routing -----------------------------------------------------------
 if mode == "Bundled-policy demo":
     render_demo_mode()
+elif mode == "Monitoring":
+    render_monitoring_mode()
 else:
     render_upload_mode()

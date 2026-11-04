@@ -75,3 +75,27 @@ def ask(api_url: str, question: str, token: str = "", timeout: float = TIMEOUT_S
         "model_used": data.get("model"),
         "fallback_used": bool(data.get("fallback_used")),
     }
+
+
+def stats(api_url: str, days: int = 7, token: str = "", timeout: float = 30,
+          get=None) -> dict[str, Any]:
+    """GET {api_url}/stats?days=N: aggregated monitoring numbers (totals and
+    per-day series only). Raises ApiError with a visitor-friendly message."""
+    import requests
+
+    get = get or requests.get
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    try:
+        resp = get(f"{api_url.rstrip('/')}/stats", params={"days": days},
+                   headers=headers, timeout=timeout)
+    except requests.RequestException as exc:
+        raise ApiError(UNREACHABLE) from exc
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json().get("detail")
+        except Exception:  # noqa: BLE001
+            detail = None
+        raise ApiError(detail if isinstance(detail, str) and detail
+                       else f"Monitoring data isn't available ({resp.status_code}).")
+    return resp.json()
+

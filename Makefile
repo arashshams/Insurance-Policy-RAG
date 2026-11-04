@@ -88,6 +88,7 @@ deploy:
 	@test -n "$(PROJECT)" || (echo "usage: make deploy PROJECT=<gcp-project-id> [REGION=us-central1]"; exit 2)
 	gcloud run deploy $(SERVICE) --source . --project $(PROJECT) --region $(REGION) \
 	  --allow-unauthenticated --min-instances 0 --max-instances 1 --memory 1Gi --cpu 1 --timeout 120 \
+	  --update-env-vars=INSURANCE_RAG_METRICS=firestore \
 	  --update-secrets=GEMINI_API_KEY=gemini-api-key:latest,INSURANCE_RAG_API_TOKEN=insurance-rag-api-token:latest
 
 # ChromaDB rewrites the committed index files when it opens them; run this

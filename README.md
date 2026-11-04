@@ -269,6 +269,22 @@ visitor -> Streamlit app (Streamlit Community Cloud)
 
 Deploy with `make deploy PROJECT=<gcp-project-id>` after the one-time setup in [docs/DEPLOY.md](docs/DEPLOY.md); run the container locally with `make docker-build docker-run` (keys in a git-ignored `.env`).
 
+## Monitoring (what we record, and what we don't)
+
+The deployed API keeps one small record per question so the demo's health can be watched over time, and the app's **Monitoring** page charts them: questions per day, the "I don't know" rate (and whether the relevance threshold or the model said it), how often the backup model answered, response times (median and 95th percentile), errors by type, and the closest-passage distance per day next to the 0.37 threshold, an early sign that people are asking about things the policy doesn't cover.
+
+| Recorded per question | Never recorded |
+|---|---|
+| time, request id, status, total / retrieval / generation seconds | the question |
+| answered or "I don't know", and which layer said it | the answer |
+| closest-passage distance, number of passages | the retrieved passages |
+| model used, whether the backup answered and why | the visitor's IP address |
+| error type; pipeline fingerprint and app version | anything about uploaded PDFs (they run in the app, not the API) |
+
+One caveat: Cloud Run's own platform request log (kept 30 days by Google Cloud Logging) records each request's URL, status and client IP, as it does for every Cloud Run service; the container itself doesn't log IPs (uvicorn's access log is off).
+
+Records live in the project's Firestore database (free tier) and are deleted after 90 days; the code that builds them keeps only a fixed list of fields (`src/monitoring.py`). The API serves only totals and per-day series (`GET /stats`), and the same fields go to Cloud Run's logs as one JSON line per question. Setup: `docs/DEPLOY.md`, step 7.
+
 ## Responsible AI
 
 - Answers are grounded in retrieved document content and cited by page. Pages come from the passages the model actually cited; when it cites none, the app says the pages are those of all retrieved passages instead.

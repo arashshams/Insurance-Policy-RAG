@@ -40,5 +40,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
 # Cloud Run sets PORT. --proxy-headers takes the client address from the
 # X-Forwarded-For header added by the platform's front end, so the API's
 # per-client rate limit sees visitors instead of the proxy (the global limit
-# applies either way).
-CMD ["sh", "-c", "exec uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips='*'"]
+# applies either way). --no-access-log: uvicorn's access log would print each
+# visitor's IP address; the API's own JSON line per question replaces it
+# (PLAN.md M5).
+CMD ["sh", "-c", "exec uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers --forwarded-allow-ips='*' --no-access-log"]
