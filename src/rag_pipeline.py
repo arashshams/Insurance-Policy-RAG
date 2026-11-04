@@ -719,6 +719,8 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
       fallback_used       True when model_name failed (overloaded, rate-
                           limited or out of quota) and fallback_model answered
       fallback_reason     the primary model's error type when it did
+      timings             {"retrieve_s", "generate_s"}: seconds spent embedding
+                          + searching, and generating (None if it didn't run)
       generation_calls    generation requests made (0 if the threshold
                           short-circuited, 2 if a truncated answer was retried);
                           lets the evaluation budget the daily quota
@@ -729,7 +731,9 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
     and different from model_name, the primary model gets a single attempt
     and, if Gemini is unavailable for it, the fallback model answers instead.
     """
+    started = time.monotonic()
     all_hits = _query_chunks(collection, question, k=k)
+    retrieve_s = round(time.monotonic() - started, 3)
     retrieved = _apply_threshold(all_hits, threshold)
     distances = [h["score"] for h in all_hits if h["score"] is not None]
 
@@ -753,6 +757,7 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
         "model_used": None,
         "fallback_used": False,
         "fallback_reason": None,
+        "timings": {"retrieve_s": retrieve_s, "generate_s": None},
     }
 
     # Short-circuit: no grounded context -> "I don't know" (no LLM call).
@@ -788,6 +793,7 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
         result["generation_calls"] += 1
         return response
 
+    generate_started = time.monotonic()
     use_fallback = bool(fallback_model) and fallback_model != model_name
     model_used = model_name
     try:
@@ -814,6 +820,7 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
         finish_reason = getattr(response.choices[0], "finish_reason", None)
 
     result["finish_reason"] = finish_reason
+    result["timings"]["generate_s"] = round(time.monotonic() - generate_started, 3)
     # Record the model name the API reports. Gemini's OpenAI-compatible
     # endpoint currently just echoes the requested name (alias included), so
     # this only identifies an exact version if one was requested.

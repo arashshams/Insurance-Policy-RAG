@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-11-03 (M4 done and closed with PR #33; paused, see "Where we are")
+Last updated: 2026-11-04 (M5 implemented on branch `m5-monitoring`; see "Where we are")
 
 ---
 
@@ -35,8 +35,13 @@ Last updated: 2026-11-03 (M4 done and closed with PR #33; paused, see "Where we 
   (`gemini-3.6-flash`) passed the guardrail on the smoke subset but
   over-refused two answerable items (see D19); kept on purpose. Closing PR
   #33 (API root page) is merged and deployed; the app's "Demo served by
-  API" link now shows the service description. The owner paused the work
-  here.
+  API" link now shows the service description.
+- **M5 (privacy-safe monitoring) is implemented on branch `m5-monitoring`**
+  (2026-11-04; plan approved with the recommended options, D20). Owner's
+  steps: apply, `make test lint` (rag env), PR, merge; then DEPLOY.md
+  step 7: create the Firestore database (Native, us-central1), grant
+  `roles/datastore.user`, `make deploy`, ask one question, open the app's
+  Monitoring page.
 - **Next items (propose plans first):**
   1. M1d (committed v2 report + failure analysis) once the owner's daily
      `make eval` / `make judge` runs cover all items, then the hand-scoring
@@ -240,6 +245,7 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | D4 | LLM judge uses a **pinned** model version, different from the generator: default `gemini-3.6-flash` (`INSURANCE_RAG_JUDGE_MODEL`). | `-latest` aliases make judge scores drift; a different model reduces self-grading bias; on the free tier each model has its own daily quota, so judging doesn't use the generator's. Still a Gemini judge of Gemini answers: agreement with the owner's hand scores is reported. A judge from another provider is a possible later upgrade. | Decided (owner, 2026-10-28) |
 | D16 | **Pipeline fingerprint in cached answers:** each answer records a hash of the prompts, generation budget, reasoning setting, chunking and IDK string (`rag_pipeline.pipeline_fingerprint()`); a cached answer is reused only if it matches. Answers cached before this change (no fingerprint) adopt the current one once. | The cache key covered question/index/model/threshold/k but not the prompt, so editing the prompt silently reused old answers in reports and would hide regressions in CI. Adoption keeps the owner's in-progress v2 run (nothing changed since those answers). | Decided (owner, 2026-10-29) |
 | D17 | **CI evaluation design:** smoke eval of 12 items (`eval/smoke_v2.txt`, every category, edge cases of the guardrail) runs automatically on PRs touching `src/`, `eval/`, `app/demo_index/` or `requirements.txt`, always with fresh answers and `--max-calls 15`; gates: no abstain item answered, no answerable item abstained, at most 1 failed item; no judge in CI. Skips (not fails) without the secret (forks) or on a quota stop. Full eval is manual only, resumable through the GitHub cache. Model check weekly. | Catches regressions where the PR changes behaviour while keeping quota use small; strict on the guardrail, tolerant of one off answer; quota or forks never block a PR. A scheduled full eval would only re-measure the pinned, unchanged system. | Decided (owner, 2026-10-29) |
+| D20 | **Monitoring design:** one metrics record per API question in the project's (default) **Firestore** database (Native, us-central1, free tier: 1 GiB, 20k writes / 50k reads per day), with a fixed field whitelist (no question, answer, passages or IP); structured JSON log lines with the same fields for Cloud Logging (50 GiB/month free, 30-day retention); a public **Monitoring** page in the app showing aggregates only (from `GET /stats`, token-protected, cached 5 min); 90-day retention via the API's own deletes (Firestore TTL deletes are billed); upload mode records nothing. | Cloud Run instances lose local state, so metrics need an external store; Firestore is in the same project, free at demo scale and needs no extra keys on Cloud Run. Aggregates-only on a public page keeps it a portfolio feature without exposing anyone's questions. | Decided (owner, 2026-11-04) |
 | D19 | **Serving fallback model:** the API and the Streamlit app pass `fallback_model=GEN_FALLBACK_MODEL` (`gemini-3.6-flash`, env `INSURANCE_RAG_GEN_FALLBACK_MODEL`, "" disables). The main model gets one attempt; if Gemini is unavailable for it (503 overload, rate limit, daily quota) the fallback answers. Every answer reports `model_used` / `fallback_used` (API fields `model`, `fallback_used`; log line `model=... fallback=... reason=...`; app caption). The evaluation and judge never fall back (they measure the pinned generator); smoke-eval has a `gen_model` input to check the fallback against the gates; the weekly model check watches it. App timeout 90 s (two attempts) inside Cloud Run's 120 s. | `gemini-3.8-flash` returned 503 "high demand" on two consecutive days, so the demo was down while the deployment itself was fine. A documented, visible exception to strict pinning (D15) keeps the demo answering; per-model free-tier quotas mean the fallback also covers the main model's daily limit. Cost: some answers come from a model not evaluated as the generator, hence the smoke-eval check and the labels. | Decided (owner, 2026-11-03). **Fallback check (smoke subset, 2026-11-03):** `gemini-3.6-flash` passed 10/12; guardrail 100% (no out-of-scope question answered), evidence hit 100%, but it said "I don't know" on `defer_01` (should point to the Schedule of Benefits) and `adv_02` (injection plus an answerable cosmetic-surgery question), so the "no wrongful abstention" gate failed. Its failure mode is over-refusal, the safe direction, and it only answers while the main model is unavailable: owner kept the fallback. One run only; re-run to see if the misses repeat. |
 | D18 | **Deploy the API to Google Cloud Run** (`us-central1`), from source with one command from the owner's machine (`make deploy`, Cloud Build builds the `Dockerfile`): min 0 / max 1 instance, 1 GiB, Gemini key and API token from Secret Manager, public URL with the app's bearer token required for `/ask`. Slim image from `requirements-api.txt` (same pins as `requirements.txt`, test-enforced), non-root, index opened at startup. CI builds and starts the image with no key on relevant PRs. Deploy from GitHub Actions (Workload Identity Federation) deferred. | Checked free tiers (2026-11-02): Cloud Run's free tier (2M requests/month + CPU/memory time, request-based billing, nothing charged while idle) fits a demo and runs the same container; Render's free tier sleeps after 15 min (~1 min wake), has 512 MB and may suspend services that call external APIs heavily; Fly.io has no free tier for new accounts; Hugging Face Docker Spaces terms for free accounts were unclear. Cost: a billing account is required; image storage above Artifact Registry's free 0.5 GB costs cents. | Decided (owner, 2026-11-02) |
 | D15 | **Pin the generator model** (`gemini-3.8-flash`) instead of the `gemini-flash-latest` alias. Cached answers no longer expire for a pinned model (14 days only for an alias). Upgrades are deliberate: evaluate the new model via `INSURANCE_RAG_GEN_MODEL`, compare reports, then change the default (README "Upgrading the model"). A weekly CI job (M2) lists the models the key can use and opens an issue when the pinned model disappears or a newer Flash appears. | Every reported number describes one model; the guardrail's model-refusal layer depends on the generator's behaviour, so a silent switch could change it unmeasured; an alias also forced re-asking all answers every 14 days, wiping judge and human scores. Cost: the app breaks if the pinned model is retired before it is bumped, hence the weekly check. | Decided (owner, 2026-10-28) |
@@ -432,16 +438,28 @@ README traces to a committed report.
   app's "Demo served by API" link points there).
 - Upload mode per D3 (stays in the Streamlit app).
 
-### M5. Monitoring (privacy-safe) — `[ ]`
+### M5. Monitoring (privacy-safe) — `[~]` (implemented on branch `m5-monitoring`; owner to merge and set up Firestore)
 
-- Per request log: timestamp, latency, abstained, abstention layer
-  (threshold vs model), top retrieval score, number of chunks retrieved,
-  model and prompt version. Never log document text; never log raw
-  questions from upload mode (demo-mode questions only if documented).
-- Storage: cloud containers lose local files, so pick a free external store
-  (host's structured logging, or a small free hosted DB). Decide in the M5
-  plan.
-- Streamlit dashboard page: latency, abstention rate, score drift.
+- [x] `src/monitoring.py`: one record per API question with a fixed field
+  whitelist (timings, abstained + layer, nearest distance, passages count,
+  model, fallback + reason, error type, pipeline fingerprint, Cloud Run
+  revision); never question/answer/passages/IP. Stores: `firestore` (Cloud
+  Run), `memory` (local/tests), `off`; best-effort writes (2 s timeout,
+  failures only logged); 90-day retention by the API's own deletes.
+- [x] Pipeline reports `timings` (retrieve_s, generate_s).
+- [x] API: one structured JSON log line per question (Cloud Logging
+  `jsonPayload`, `severity`), metrics record, `GET /stats?days=N`
+  (aggregates and per-day series only, bearer token), `/health` shows the
+  metrics backend; uvicorn access log off (it printed visitor IPs).
+- [x] App: "Monitoring" page (stat tiles; per-day charts of questions,
+  "I don't know" rate, p50/p95 latency, closest-passage distance vs the
+  0.37 threshold; table view; errors by type), cached 5 minutes.
+- [x] `google-cloud-firestore==2.19.0` (resolves with chromadb 0.4.24 and
+  streamlit 1.37.1); deploy sets `INSURANCE_RAG_METRICS=firestore`;
+  DEPLOY.md step 7; README "Monitoring" section with what is and isn't
+  recorded (incl. Cloud Run's own platform request log, which has IPs).
+- [x] Offline tests (14 new; the request-log test rewritten for JSON lines).
+- [ ] Owner: merge; Firestore + IAM + redeploy; confirm the Monitoring page.
 
 ### M6. Agentic multi-document mode — `[ ]`
 
@@ -628,3 +646,12 @@ sections. 2–3 resume bullets, describing only what was built.
   link in the app works. **M4 closed. Paused.** Next when the owner is
   back: M1d once the eval data is in (`make eval` / `make judge`), then M3
   (propose the plan first).
+- **2026-11-04 — branch `m5-monitoring`.** Owner approved the M5 plan with
+  the recommended options (Firestore + structured logs, public aggregates
+  dashboard, 90-day retention; D20) after a check of Firestore and Cloud
+  Logging free tiers. Added `src/monitoring.py`, pipeline timings, JSON
+  request logs, `/stats`, the app's Monitoring page, `google-cloud-firestore`
+  (pin checked to resolve with chromadb and streamlit), deploy env, DEPLOY.md
+  step 7, README section, uvicorn access log off, 14 offline tests. Agent
+  ran lint and a dependency resolution check only; delivered as a `git am`
+  mailbox.

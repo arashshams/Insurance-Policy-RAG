@@ -31,6 +31,7 @@ Run locally:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import secrets
@@ -41,7 +42,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 # --- Make src/ importable whether run from repo root or api/ ----------------
@@ -50,14 +51,17 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src import guardrails  # noqa: E402 - after sys.path setup
+from src import monitoring  # noqa: E402 - after sys.path setup
 from src.rag_pipeline import (  # noqa: E402 - after sys.path setup
     GEN_FALLBACK_MODEL,
+    DISTANCE_THRESHOLD,
     GEN_MODEL,
     K_DEFAULT,
     GeminiQuotaExhaustedError,
     GeminiUnavailableError,
     answer_question_detailed,
     load_persistent_collection,
+    pipeline_fingerprint,
 )
 
 # Path to the pre-built demo index shipped with the app (same as Streamlit).
@@ -68,10 +72,43 @@ DEMO_INDEX_DIR = os.environ.get(
 MAX_QUESTION_CHARS = int(os.environ.get("INSURANCE_RAG_MAX_QUESTION_CHARS", "1000"))
 
 log = logging.getLogger("insurance_rag.api")
-# One line per question goes to stdout (Cloud Run collects it): outcome,
-# latency and, on failure, the error type. Never the question or answer text.
 logging.basicConfig(level=os.environ.get("INSURANCE_RAG_LOG_LEVEL", "INFO"),
                     format="%(levelname)s %(name)s: %(message)s")
+
+# One JSON line per question on stdout. Cloud Run parses it into a structured
+# log entry ("severity" and "message" are special fields), so the console can
+# filter on any field. Same fields as the metrics record (src/monitoring.py):
+# never the question, the answer or the client address.
+request_log = logging.getLogger("insurance_rag.requests")
+if not request_log.handlers:
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setFormatter(logging.Formatter("%(message)s"))
+    request_log.addHandler(_handler)
+    request_log.setLevel(logging.INFO)
+    request_log.propagate = False
+
+# Version label for metrics: Cloud Run sets K_REVISION on every deploy.
+APP_VERSION = os.environ.get("K_REVISION") or os.environ.get("INSURANCE_RAG_VERSION") or "local"
+_PIPELINE = pipeline_fingerprint()
+
+
+def _record_request(*, rid: str, status: int, seconds: float, result: dict | None = None,
+                    error: Exception | None = None) -> None:
+    """Log one structured line and store one metrics record (best-effort)."""
+    event = monitoring.build_event(
+        rid=rid, status=status, seconds=seconds, result=result,
+        error=type(error).__name__ if error else None,
+        pipeline=_PIPELINE, version=APP_VERSION)
+    cause = type(error.__cause__).__name__ if error is not None and error.__cause__ else None
+    if error is None:
+        message = (f"ask ok {event['seconds']:.1f}s model={event['model']}"
+                   + (" (fallback)" if event["fallback_used"] else ""))
+    else:
+        message = f"ask failed {status} {event['error']} cause={cause}"
+    request_log.log(logging.INFO if error is None else logging.WARNING, json.dumps({
+        "severity": "INFO" if error is None else "WARNING", "message": message,
+        **event, "cause": cause}))
+    monitoring.record(event)
 
 # Module-level cache for the opened collection (loaded once).
 _collection = None
@@ -209,7 +246,7 @@ def root() -> dict[str, Any]:
         "service": "Insurance-Policy-RAG API",
         "description": "Grounded, page-cited answers about a sample insurance policy.",
         "endpoints": {"health": "GET /health", "ask": "POST /ask (bearer token)",
-                      "docs": "/docs"},
+                      "stats": "GET /stats?days=7 (bearer token)", "docs": "/docs"},
         "source": "https://github.com/arashshams/Insurance-Policy-RAG",
     }
 
@@ -225,7 +262,36 @@ def health() -> dict[str, Any]:
         "auth_required": bool(_api_token()),
         "model_default": GEN_MODEL,
         "model_fallback": GEN_FALLBACK_MODEL or None,
+        "metrics": monitoring.BACKEND,
     }
+
+
+@app.get("/stats")
+def stats(
+    request: Request,
+    days: int = Query(7, ge=1, le=90, description="How many days back to aggregate."),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Aggregated monitoring numbers for the last `days` days (PLAN.md M5):
+    request and error counts, "I don't know" rate by layer, fallback rate,
+    latency, closest-passage distance, per day. Totals only, never individual
+    questions. Same bearer token as /ask. Never calls the LLM."""
+    _check_auth(authorization)
+    _check_rate(request.client.host if request.client else "unknown")
+    store = monitoring.get_store()
+    if store is None:
+        raise HTTPException(status_code=404, detail="Monitoring is turned off on this server.")
+    now = time.time()
+    monitoring.prune_old(store, now=now)
+    try:
+        events = store.events_since(now - days * 86400)
+    except Exception as exc:  # noqa: BLE001 - report the store being down clearly
+        log.warning("metrics read failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Monitoring data is unavailable "
+                                                    "right now.") from exc
+    summary = monitoring.summarize(events, days, now=now, threshold=DISTANCE_THRESHOLD)
+    summary.update(backend=monitoring.BACKEND, version=APP_VERSION)
+    return summary
 
 
 @app.post("/ask", response_model=AskResponse)
@@ -253,9 +319,8 @@ def ask(
     started = time.monotonic()
 
     def _log_failure(status: int, exc: Exception) -> None:
-        cause = type(exc.__cause__).__name__ if exc.__cause__ else "-"
-        log.warning("ask failed rid=%s status=%d error=%s cause=%s seconds=%.1f",
-                    rid, status, type(exc).__name__, cause, time.monotonic() - started)
+        _record_request(rid=rid, status=status, seconds=time.monotonic() - started,
+                        error=exc)
 
     try:
         result = answer_question_detailed(collection, req.question, k=req.k,
@@ -278,12 +343,7 @@ def ask(
         _log_failure(502, exc)
         raise HTTPException(status_code=502, detail=f"Pipeline error: {exc}") from exc
 
-    log.info("ask ok rid=%s seconds=%.1f abstained=%s retrieved=%d generation_calls=%s "
-             "model=%s fallback=%s%s",
-             rid, time.monotonic() - started, result["abstained"],
-             len(result["retrieved"]), result.get("generation_calls", "-"),
-             result.get("model_used") or "-", bool(result.get("fallback_used")),
-             f" reason={result['fallback_reason']}" if result.get("fallback_used") else "")
+    _record_request(rid=rid, status=200, seconds=time.monotonic() - started, result=result)
 
     chunks = [
         RetrievedChunk(

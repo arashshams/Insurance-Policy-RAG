@@ -36,3 +36,8 @@ streamlit==1.37.1
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
 requests==2.32.3
+
+# Request metrics for the deployed API (src/monitoring.py, PLAN.md M5): the
+# project's Firestore database on Cloud Run. Pinned to a version that resolves
+# together with chromadb 0.4.24 and streamlit 1.37.1 (protobuf < 6).
+google-cloud-firestore==2.19.0
