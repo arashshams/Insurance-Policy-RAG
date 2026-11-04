@@ -655,3 +655,13 @@ sections. 2–3 resume bullets, describing only what was built.
   step 7, README section, uvicorn access log off, 14 offline tests. Agent
   ran lint and a dependency resolution check only; delivered as a `git am`
   mailbox.
+- **2026-11-04 — PR #34 (merged), Firestore set up, M5 live.** Owner created
+  the (default) Firestore database (Standard edition, Native mode,
+  us-central1, restrictive security rules: the API uses IAM, not rules),
+  granted `roles/datastore.user`, redeployed; `/health` shows
+  `"metrics":"firestore"`. The Monitoring page showed numbers and charts but
+  one chart failed in the browser: Vega-Lite reads dots, brackets and
+  straight quotes in column names as field paths (`"I don't know" rate`,
+  `relevance threshold (0.37)`). Branch `fix/dashboard-labels`: chart data
+  moved to `app/dashboard.py` with plain column names, the threshold value
+  moved to a caption, 4 offline tests reject unsafe names.
