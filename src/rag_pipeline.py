@@ -64,6 +64,13 @@ GEN_MODEL = os.environ.get("INSURANCE_RAG_GEN_MODEL", "gemini-3.8-flash")
 # never falls back: it measures GEN_MODEL only. Set to "" to disable.
 GEN_FALLBACK_MODEL = os.environ.get("INSURANCE_RAG_GEN_FALLBACK_MODEL", "gemini-3.6-flash")
 
+# With a fallback, how long (seconds) the single attempt on the main model may
+# take before the fallback answers instead. Unset = the normal per-request
+# timeout. The container sets 8: a healthy main model answers in ~5 s, while
+# an overloaded one took 16-20 s just to report "high demand" (PLAN.md D19).
+_primary_timeout = os.environ.get("INSURANCE_RAG_PRIMARY_TIMEOUT", "").strip()
+GEN_PRIMARY_TIMEOUT_S = float(_primary_timeout) if _primary_timeout else None
+
 
 def is_moving_alias(model: str) -> bool:
     """True for names like "gemini-flash-latest" whose model can change."""
@@ -776,7 +783,7 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
     client = get_client()
     extra_body = {"reasoning_effort": GEN_REASONING_EFFORT} if GEN_REASONING_EFFORT else None
 
-    def _generate(max_tokens, model, max_retries=None):
+    def _generate(max_tokens, model, max_retries=None, timeout=None):
         """One generation attempt, retrying transient errors with backoff."""
         kwargs = dict(
             model=model,
@@ -784,6 +791,8 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
             temperature=0.0,
             max_tokens=max_tokens,
         )
+        if timeout:
+            kwargs["timeout"] = timeout  # per-request override of the client's
         if extra_body:
             kwargs["extra_body"] = extra_body
         response = _call_with_backoff(
@@ -800,7 +809,8 @@ def answer_question_detailed(collection, question, k=K_DEFAULT,
         # With a fallback, the primary model gets one attempt: the fallback
         # is the retry, which keeps the whole request well inside the
         # serving timeouts.
-        response = _generate(GEN_MAX_TOKENS, model_name, 0 if use_fallback else None)
+        response = _generate(GEN_MAX_TOKENS, model_name, 0 if use_fallback else None,
+                             GEN_PRIMARY_TIMEOUT_S if use_fallback else None)
     except GeminiUnavailableError as exc:
         if not use_fallback:
             raise

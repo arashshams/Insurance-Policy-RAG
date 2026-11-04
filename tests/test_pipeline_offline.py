@@ -767,3 +767,31 @@ def test_the_evaluation_never_falls_back():
         "fallback_model"].default is None
     for name in ("evaluate.py", "judge.py"):
         assert "fallback_model" not in (REPO_ROOT / "src" / name).read_text(encoding="utf-8")
+
+
+def test_main_model_gets_a_short_first_attempt_only_when_a_fallback_exists(monkeypatch,
+                                                                           fake_embeddings,
+                                                                           no_sleep):
+    import openai
+
+    seen = []
+
+    def create(**kw):
+        seen.append((kw["model"], kw.get("timeout")))
+        if kw["model"] == "main" and busy:
+            raise _openai_error(openai.InternalServerError, 503)
+        return SimpleNamespace(model=kw["model"], choices=[SimpleNamespace(
+            finish_reason="stop", message=SimpleNamespace(content="Covered [doc_0]."))])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    monkeypatch.setattr(rp, "get_client", lambda: client)
+    monkeypatch.setattr(rp, "GEN_PRIMARY_TIMEOUT_S", 8.0)
+
+    busy = True
+    r = rp.answer_question_detailed(_FakeCollection(0.2), "q", model_name="main",
+                                    fallback_model="backup")
+    assert seen == [("main", 8.0), ("backup", None)] and r["fallback_used"]
+
+    seen.clear()
+    busy = False
+    rp.answer_question_detailed(_FakeCollection(0.2), "q", model_name="main")
+    assert seen == [("main", None)]  # no fallback: the normal timeout

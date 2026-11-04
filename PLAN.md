@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-11-04 (M5 implemented on branch `m5-monitoring`; see "Where we are")
+Last updated: 2026-11-04 (M5 done: monitoring live; short first attempt on branch `fallback-timeout`; see "Where we are")
 
 ---
 
@@ -36,12 +36,22 @@ Last updated: 2026-11-04 (M5 implemented on branch `m5-monitoring`; see "Where w
   over-refused two answerable items (see D19); kept on purpose. Closing PR
   #33 (API root page) is merged and deployed; the app's "Demo served by
   API" link now shows the service description.
-- **M5 (privacy-safe monitoring) is implemented on branch `m5-monitoring`**
-  (2026-11-04; plan approved with the recommended options, D20). Owner's
-  steps: apply, `make test lint` (rag env), PR, merge; then DEPLOY.md
-  step 7: create the Firestore database (Native, us-central1), grant
-  `roles/datastore.user`, `make deploy`, ask one question, open the app's
-  Monitoring page.
+- **M5 (privacy-safe monitoring) is done (2026-11-04).** PRs #34 and #35
+  merged; Firestore `(default)` database (Standard edition, Native mode,
+  us-central1, restrictive rules) set up; the app's Monitoring page shows
+  the live numbers (Streamlit Cloud needed a "Reboot app" to pick up #35).
+  **First finding from the dashboard:** the backup model answered all 3
+  questions on 2026-11-04 (median 21.7 s): `gemini-3.8-flash` returned slow
+  503s ("high demand", 16-20 s to arrive) or timed out at 20 s, three days
+  running. Branch `fallback-timeout`: the main model's single attempt gets
+  8 s when a backup exists (`INSURANCE_RAG_PRIMARY_TIMEOUT=8` in the
+  container), so outages cost ~10 s per answer instead of ~20. Owner:
+  apply, test, PR, merge, `make deploy`, then watch the dashboard's median
+  response time.
+- **Open question (after M1d):** if the main model keeps being overloaded,
+  consider making `gemini-3.6-flash` the main model, but only after the
+  full evaluation shows it is as good (it over-refused 2/12 on the smoke
+  subset, D19). The dashboard's backup share and latency are the evidence.
 - **Next items (propose plans first):**
   1. M1d (committed v2 report + failure analysis) once the owner's daily
      `make eval` / `make judge` runs cover all items, then the hand-scoring
@@ -246,7 +256,7 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | D16 | **Pipeline fingerprint in cached answers:** each answer records a hash of the prompts, generation budget, reasoning setting, chunking and IDK string (`rag_pipeline.pipeline_fingerprint()`); a cached answer is reused only if it matches. Answers cached before this change (no fingerprint) adopt the current one once. | The cache key covered question/index/model/threshold/k but not the prompt, so editing the prompt silently reused old answers in reports and would hide regressions in CI. Adoption keeps the owner's in-progress v2 run (nothing changed since those answers). | Decided (owner, 2026-10-29) |
 | D17 | **CI evaluation design:** smoke eval of 12 items (`eval/smoke_v2.txt`, every category, edge cases of the guardrail) runs automatically on PRs touching `src/`, `eval/`, `app/demo_index/` or `requirements.txt`, always with fresh answers and `--max-calls 15`; gates: no abstain item answered, no answerable item abstained, at most 1 failed item; no judge in CI. Skips (not fails) without the secret (forks) or on a quota stop. Full eval is manual only, resumable through the GitHub cache. Model check weekly. | Catches regressions where the PR changes behaviour while keeping quota use small; strict on the guardrail, tolerant of one off answer; quota or forks never block a PR. A scheduled full eval would only re-measure the pinned, unchanged system. | Decided (owner, 2026-10-29) |
 | D20 | **Monitoring design:** one metrics record per API question in the project's (default) **Firestore** database (Native, us-central1, free tier: 1 GiB, 20k writes / 50k reads per day), with a fixed field whitelist (no question, answer, passages or IP); structured JSON log lines with the same fields for Cloud Logging (50 GiB/month free, 30-day retention); a public **Monitoring** page in the app showing aggregates only (from `GET /stats`, token-protected, cached 5 min); 90-day retention via the API's own deletes (Firestore TTL deletes are billed); upload mode records nothing. | Cloud Run instances lose local state, so metrics need an external store; Firestore is in the same project, free at demo scale and needs no extra keys on Cloud Run. Aggregates-only on a public page keeps it a portfolio feature without exposing anyone's questions. | Decided (owner, 2026-11-04) |
-| D19 | **Serving fallback model:** the API and the Streamlit app pass `fallback_model=GEN_FALLBACK_MODEL` (`gemini-3.6-flash`, env `INSURANCE_RAG_GEN_FALLBACK_MODEL`, "" disables). The main model gets one attempt; if Gemini is unavailable for it (503 overload, rate limit, daily quota) the fallback answers. Every answer reports `model_used` / `fallback_used` (API fields `model`, `fallback_used`; log line `model=... fallback=... reason=...`; app caption). The evaluation and judge never fall back (they measure the pinned generator); smoke-eval has a `gen_model` input to check the fallback against the gates; the weekly model check watches it. App timeout 90 s (two attempts) inside Cloud Run's 120 s. | `gemini-3.8-flash` returned 503 "high demand" on two consecutive days, so the demo was down while the deployment itself was fine. A documented, visible exception to strict pinning (D15) keeps the demo answering; per-model free-tier quotas mean the fallback also covers the main model's daily limit. Cost: some answers come from a model not evaluated as the generator, hence the smoke-eval check and the labels. | Decided (owner, 2026-11-03). **Fallback check (smoke subset, 2026-11-03):** `gemini-3.6-flash` passed 10/12; guardrail 100% (no out-of-scope question answered), evidence hit 100%, but it said "I don't know" on `defer_01` (should point to the Schedule of Benefits) and `adv_02` (injection plus an answerable cosmetic-surgery question), so the "no wrongful abstention" gate failed. Its failure mode is over-refusal, the safe direction, and it only answers while the main model is unavailable: owner kept the fallback. One run only; re-run to see if the misses repeat. |
+| D19 | **Serving fallback model:** the API and the Streamlit app pass `fallback_model=GEN_FALLBACK_MODEL` (`gemini-3.6-flash`, env `INSURANCE_RAG_GEN_FALLBACK_MODEL`, "" disables). The main model gets one attempt; if Gemini is unavailable for it (503 overload, rate limit, daily quota) the fallback answers. Every answer reports `model_used` / `fallback_used` (API fields `model`, `fallback_used`; log line `model=... fallback=... reason=...`; app caption). The evaluation and judge never fall back (they measure the pinned generator); smoke-eval has a `gen_model` input to check the fallback against the gates; the weekly model check watches it. App timeout 90 s (two attempts) inside Cloud Run's 120 s. | `gemini-3.8-flash` returned 503 "high demand" on two consecutive days, so the demo was down while the deployment itself was fine. A documented, visible exception to strict pinning (D15) keeps the demo answering; per-model free-tier quotas mean the fallback also covers the main model's daily limit. Cost: some answers come from a model not evaluated as the generator, hence the smoke-eval check and the labels. | Decided (owner, 2026-11-03). **Fallback check (smoke subset, 2026-11-03):** `gemini-3.6-flash` passed 10/12; guardrail 100% (no out-of-scope question answered), evidence hit 100%, but it said "I don't know" on `defer_01` (should point to the Schedule of Benefits) and `adv_02` (injection plus an answerable cosmetic-surgery question), so the "no wrongful abstention" gate failed. Its failure mode is over-refusal, the safe direction, and it only answers while the main model is unavailable: owner kept the fallback. One run only; re-run to see if the misses repeat. **Latency follow-up (2026-11-04):** overloaded `gemini-3.8-flash` took 16-20 s to answer 503 or timed out at 20 s, so every backup answer took ~20 s; the main model's single attempt now gets 8 s when a backup exists (`INSURANCE_RAG_PRIMARY_TIMEOUT`; a healthy main model answers in ~5 s). |
 | D18 | **Deploy the API to Google Cloud Run** (`us-central1`), from source with one command from the owner's machine (`make deploy`, Cloud Build builds the `Dockerfile`): min 0 / max 1 instance, 1 GiB, Gemini key and API token from Secret Manager, public URL with the app's bearer token required for `/ask`. Slim image from `requirements-api.txt` (same pins as `requirements.txt`, test-enforced), non-root, index opened at startup. CI builds and starts the image with no key on relevant PRs. Deploy from GitHub Actions (Workload Identity Federation) deferred. | Checked free tiers (2026-11-02): Cloud Run's free tier (2M requests/month + CPU/memory time, request-based billing, nothing charged while idle) fits a demo and runs the same container; Render's free tier sleeps after 15 min (~1 min wake), has 512 MB and may suspend services that call external APIs heavily; Fly.io has no free tier for new accounts; Hugging Face Docker Spaces terms for free accounts were unclear. Cost: a billing account is required; image storage above Artifact Registry's free 0.5 GB costs cents. | Decided (owner, 2026-11-02) |
 | D15 | **Pin the generator model** (`gemini-3.8-flash`) instead of the `gemini-flash-latest` alias. Cached answers no longer expire for a pinned model (14 days only for an alias). Upgrades are deliberate: evaluate the new model via `INSURANCE_RAG_GEN_MODEL`, compare reports, then change the default (README "Upgrading the model"). A weekly CI job (M2) lists the models the key can use and opens an issue when the pinned model disappears or a newer Flash appears. | Every reported number describes one model; the guardrail's model-refusal layer depends on the generator's behaviour, so a silent switch could change it unmeasured; an alias also forced re-asking all answers every 14 days, wiping judge and human scores. Cost: the app breaks if the pinned model is retired before it is bumped, hence the weekly check. | Decided (owner, 2026-10-28) |
 | D14 | Judge design: one call per item scores **faithfulness** (vs the retrieved passages) and **correctness** (vs the reference answer) on a **0–2** scale; only answered answer/defer items with the right behaviour are judged; prompt is a versioned file whose name + hash are in the cache key; **separate `make judge` step** with its own cache; "strict pass" = judge-free pass + both scores 2; human check on ~20 stratified items with exact / within-one / quadratic-weighted kappa, counted only for the answer the human scored (answer hash). | Few levels give steadier judge scores and an easier human sheet; separate steps keep the generator's and judge's quotas and caches independent; hashes make every score traceable and stale human scores visible. | Decided (owner, 2026-10-28) |
@@ -438,7 +448,7 @@ README traces to a committed report.
   app's "Demo served by API" link points there).
 - Upload mode per D3 (stays in the Streamlit app).
 
-### M5. Monitoring (privacy-safe) — `[~]` (implemented on branch `m5-monitoring`; owner to merge and set up Firestore)
+### M5. Monitoring (privacy-safe) — `[x]` (PRs #34, #35; live 2026-11-04)
 
 - [x] `src/monitoring.py`: one record per API question with a fixed field
   whitelist (timings, abstained + layer, nearest distance, passages count,
@@ -459,7 +469,17 @@ README traces to a committed report.
   DEPLOY.md step 7; README "Monitoring" section with what is and isn't
   recorded (incl. Cloud Run's own platform request log, which has IPs).
 - [x] Offline tests (14 new; the request-log test rewritten for JSON lines).
-- [ ] Owner: merge; Firestore + IAM + redeploy; confirm the Monitoring page.
+- [x] Owner: merged; Firestore + IAM + redeploy; Monitoring page confirmed
+  (3 questions, 0% errors, backup 100%, median 21.7 s on 2026-11-04).
+- [x] Chart fix (PR #35): Vega-Lite reads dots, brackets and straight quotes
+  in column names as field paths; chart data now built in `app/dashboard.py`
+  with plain names, tested.
+- [x] Logs: `gcloud logging read` with `jsonPayload` filters works (`gcloud
+  run services logs read` doesn't show the JSON lines reliably), e.g.
+  `gcloud logging read 'resource.type="cloud_run_revision" AND
+  resource.labels.service_name="insurance-rag-api" AND
+  jsonPayload.message:"ask ok"' --limit 10 --format='table(timestamp,
+  jsonPayload.seconds, jsonPayload.model, jsonPayload.fallback_reason)'`.
 
 ### M6. Agentic multi-document mode — `[ ]`
 
@@ -665,3 +685,8 @@ sections. 2–3 resume bullets, describing only what was built.
   `relevance threshold (0.37)`). Branch `fix/dashboard-labels`: chart data
   moved to `app/dashboard.py` with plain column names, the threshold value
   moved to a caption, 4 offline tests reject unsafe names.
+- **2026-11-04 — PR #35 (merged), M5 done.** Dashboard fixed after a
+  Streamlit Cloud reboot. Logs showed the backup answering every question
+  (two slow 503s, one timeout, 18-23 s each). Branch `fallback-timeout`:
+  8 s first attempt on the main model when a backup exists, 2 offline tests
+  (one new, one extended).
