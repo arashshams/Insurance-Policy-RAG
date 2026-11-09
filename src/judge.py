@@ -54,10 +54,16 @@ if str(REPO_ROOT) not in sys.path:
 from src import eval_metrics as em  # noqa: E402
 from src import rag_pipeline as rp  # noqa: E402
 
-JUDGE_MODEL = os.environ.get("INSURANCE_RAG_JUDGE_MODEL", "gemini-3.6-flash")
+# Gemma (open model, different family from the Gemini generator, own free
+# quota). gemini-3.5-flash is not a different judge: its requests count
+# against gemini-3.6-flash's quota (PLAN.md D4).
+JUDGE_MODEL = os.environ.get("INSURANCE_RAG_JUDGE_MODEL", "gemma-4-31b-it")
 JUDGE_PROMPT_PATH = Path(os.environ.get(
     "INSURANCE_RAG_JUDGE_PROMPT", REPO_ROOT / "eval" / "prompts" / "judge_v1.md"))
-JUDGE_MAX_TOKENS = int(os.environ.get("INSURANCE_RAG_JUDGE_MAX_TOKENS", "512"))
+# Room for models that think out loud in the reply (Gemma) before the JSON.
+JUDGE_MAX_TOKENS = int(os.environ.get("INSURANCE_RAG_JUDGE_MAX_TOKENS", "2048"))
+# Per-call timeout: Gemma took ~21 s for a one-word reply and thinks at length.
+JUDGE_TIMEOUT_S = float(os.environ.get("INSURANCE_RAG_JUDGE_TIMEOUT", "180"))
 JUDGE_REASONING_EFFORT = os.environ.get("INSURANCE_RAG_JUDGE_REASONING_EFFORT", "none")
 SCALE = (0, 1, 2)
 DEFAULT_SAMPLE_SIZE = 20
@@ -155,10 +161,24 @@ def _score(data: dict, key: str) -> int:
     return v
 
 
+# Some judge models (Gemma) put their reasoning in the reply as
+# <thought>...</thought> before the JSON; that text may contain braces.
+_THOUGHT_RE = re.compile(r"<(thought|think|thinking)>.*?</\1>", re.S | re.I)
+_THOUGHT_OPEN_RE = re.compile(r"<(thought|think|thinking)>", re.I)
+
+
+def supports_reasoning_effort(model: str) -> bool:
+    """Gemma models reject reasoning_effort ("Thinking budget is not
+    supported for this model", HTTP 400); Gemini models accept it."""
+    return not (model or "").lower().startswith("gemma")
+
+
 def parse_judgment(text: str) -> dict:
     """Parse the judge's reply: one JSON object, possibly inside a ``` fence
     or with stray text around it. Raises JudgeParseError otherwise."""
-    t = (text or "").strip()
+    t = _THOUGHT_RE.sub("", text or "").strip()
+    if _THOUGHT_OPEN_RE.search(t):
+        raise JudgeParseError("the reply was cut off while the model was still thinking")
     start, end = t.find("{"), t.rfind("}")
     if start == -1 or end <= start:
         raise JudgeParseError("no JSON object in the reply")
@@ -183,11 +203,12 @@ def make_judge_fn(model: str = JUDGE_MODEL) -> Callable[[list[dict]], str]:
     """messages -> reply text, through the pipeline's client and retry policy
     (a used-up daily quota raises GeminiQuotaExhaustedError at once)."""
     client = rp.get_client()
-    extra_body = {"reasoning_effort": JUDGE_REASONING_EFFORT} if JUDGE_REASONING_EFFORT else None
+    extra_body = ({"reasoning_effort": JUDGE_REASONING_EFFORT}
+                  if JUDGE_REASONING_EFFORT and supports_reasoning_effort(model) else None)
 
     def judge(messages: list[dict]) -> str:
         kwargs = dict(model=model, messages=messages, temperature=0.0,
-                      max_tokens=JUDGE_MAX_TOKENS)
+                      max_tokens=JUDGE_MAX_TOKENS, timeout=JUDGE_TIMEOUT_S)
         if extra_body:
             kwargs["extra_body"] = extra_body
         resp = rp._call_with_backoff(lambda: client.chat.completions.create(**kwargs), "judging")

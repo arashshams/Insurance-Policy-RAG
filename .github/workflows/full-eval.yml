@@ -22,7 +22,7 @@ on:
         description: "Generator to evaluate instead of the pinned one (e.g. gemini-3.6-flash); empty = pinned"
         default: ""
       judge_model:
-        description: "Judge model instead of the default; must differ from the generator (D4); empty = default"
+        description: "Judge model instead of the default (gemma-4-31b-it); must differ from the generator (D4); empty = default"
         default: ""
 
 concurrency:

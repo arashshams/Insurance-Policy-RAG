@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-11-09 (`gemini-3.8-flash` unusable for days; evaluating `gemini-3.6-flash` as the generator; see "Where we are")
+Last updated: 2026-11-09 (evaluating `gemini-3.6-flash` as the generator, judged by `gemma-4-31b-it`; see "Where we are")
 
 ---
 
@@ -55,15 +55,24 @@ Last updated: 2026-11-09 (`gemini-3.8-flash` unusable for days; evaluating `gemi
   response at all in 60 s (HTTP 000), while `gemini-3.6-flash` answered in
   2.4 s (HTTP 200). The live demo answers only through the backup.
   **Decision in progress (D15 upgrade path):** evaluate `gemini-3.6-flash`
-  as the generator on all 65 items, judged by `gemini-3.7-flash` (pinned,
-  listed for the key on 2026-11-09, different from the generator per D4).
-  Branch `eval-model-inputs`: full-eval workflow inputs `gen_model` and
-  `judge_model`; the judge refuses to grade its own generator. If the
-  report holds up, a follow-up PR makes `gemini-3.6-flash` the main model
-  and `gemini-3.7-flash` the judge (and picks a new backup).
+  as the generator on all 65 items (full-eval inputs from PR #37). Judge:
+  **`gemma-4-31b-it`** (D4, changed 2026-11-09 after testing candidates on
+  the CI key): `gemini-3.7-flash` gave no response in 60 s like 3.8;
+  `gemini-3.5-flash` requests are **counted against `gemini-3.6-flash`'s
+  quota** (Google's 429 says "limit: 20, model: gemini-3.6-flash"), so it
+  is not a different judge and shares the generator's 20/day;
+  `gemini-3.1-pro-preview` has a free limit of 0; `gemini-2.5-*` are
+  retired for new users. Branch `judge-gemma`: Gemma is the default judge.
+  If the report holds up, a follow-up PR makes `gemini-3.6-flash` the main
+  model (and picks a new backup).
+- **Progress of the 3.6 run (CI cache):** 23/65 answered on 2026-11-09
+  (20 pass; `para_03` and `para_08` stopped by the 0.37 distance threshold
+  at 0.388 and 0.370, `para_06` cited passages without the evidence);
+  0 judged (the 3.5 / 3.7 judge attempts hit the quota problem above).
 - **Next items (propose plans first):**
-  1. Owner: full-eval runs with `gen_model=gemini-3.6-flash`,
-     `judge_model=gemini-3.7-flash`, judge on, ~15 calls a day each, until
+  1. Owner (after merging `judge-gemma`): daily full-eval runs with
+     `gen_model=gemini-3.6-flash`, `judge_model` empty (Gemma), judge on,
+     max calls 15 each, until
      65/65 answered and judged (about 5 days; the CI key's project has its
      own quota, so the live demo is unaffected). Then `make judge-sheet`
      and hand scores.
@@ -260,7 +269,7 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | D1 | Keep the distance threshold at **0.37**. | Latest run: near-miss out-of-scope questions overlap real ones (0.335 vs up to 0.344); lowering the cutoff would reject real questions. The model's refusal handles near-misses ("two-layer guardrail"). | Decided |
 | D2 | Raw eval cache `notebooks/eval/eval_results.json` stays git-ignored; commit a **versioned summary per run** instead (`eval/reports/<set-version>_<date>.md` + small metrics JSON). | Satisfies rule 5 without churning a large cache file. | Decided (owner, 2026-10-26) |
 | D3 | **M4 option (a):** upload mode keeps running inside the Streamlit process; the deployed API serves the bundled demo policy. | Cloud hosts may run several instances and stop idle ones, so per-session in-memory indexes on the API would vanish or hit the wrong instance. Alternatives: (b) single-instance API with expiring upload session IDs, (c) re-embed per request (private but costly). | Decided (owner, 2026-10-26) |
-| D4 | LLM judge uses a **pinned** model version, different from the generator: default `gemini-3.6-flash` (`INSURANCE_RAG_JUDGE_MODEL`). | `-latest` aliases make judge scores drift; a different model reduces self-grading bias; on the free tier each model has its own daily quota, so judging doesn't use the generator's. Still a Gemini judge of Gemini answers: agreement with the owner's hand scores is reported. A judge from another provider is a possible later upgrade. | Decided (owner, 2026-10-28) **Enforced since 2026-11-09:** `src/judge.py` and the full-eval workflow stop if the judge is the generator. For evaluating `gemini-3.6-flash` as the generator, the judge is `gemini-3.7-flash` (workflow input `judge_model`). |
+| D4 | LLM judge uses a **pinned** model version, different from the generator: default `gemini-3.6-flash` (`INSURANCE_RAG_JUDGE_MODEL`). | `-latest` aliases make judge scores drift; a different model reduces self-grading bias; on the free tier each model has its own daily quota, so judging doesn't use the generator's. Still a Gemini judge of Gemini answers: agreement with the owner's hand scores is reported. A judge from another provider is a possible later upgrade. | Decided (owner, 2026-10-28) **Enforced since 2026-11-09:** `src/judge.py` and the full-eval workflow stop if the judge is the generator. **Judge changed to `gemma-4-31b-it` (2026-11-09):** an open model from a different family than the Gemini generator, with its own free quota; `gemini-3.5-flash` was rejected because Google counts its requests against `gemini-3.6-flash`'s quota (so it may be the same model underneath), `gemini-3.7-flash` did not respond, `gemini-3.1-pro-preview` has no free quota. Gemma rejects `reasoning_effort` (HTTP 400) and writes `<thought>...</thought>` before its JSON, so the judge skips that setting for Gemma, strips the thinking, allows 2,048 output tokens and a 180 s timeout. Lesson: a different model *name* is not enough; check which quota (and so which model) the 429 names. |
 | D16 | **Pipeline fingerprint in cached answers:** each answer records a hash of the prompts, generation budget, reasoning setting, chunking and IDK string (`rag_pipeline.pipeline_fingerprint()`); a cached answer is reused only if it matches. Answers cached before this change (no fingerprint) adopt the current one once. | The cache key covered question/index/model/threshold/k but not the prompt, so editing the prompt silently reused old answers in reports and would hide regressions in CI. Adoption keeps the owner's in-progress v2 run (nothing changed since those answers). | Decided (owner, 2026-10-29) |
 | D17 | **CI evaluation design:** smoke eval of 12 items (`eval/smoke_v2.txt`, every category, edge cases of the guardrail) runs automatically on PRs touching `src/`, `eval/`, `app/demo_index/` or `requirements.txt`, always with fresh answers and `--max-calls 15`; gates: no abstain item answered, no answerable item abstained, at most 1 failed item; no judge in CI. Skips (not fails) without the secret (forks) or on a quota stop. Full eval is manual only, resumable through the GitHub cache. Model check weekly. | Catches regressions where the PR changes behaviour while keeping quota use small; strict on the guardrail, tolerant of one off answer; quota or forks never block a PR. A scheduled full eval would only re-measure the pinned, unchanged system. | Decided (owner, 2026-10-29) |
 | D20 | **Monitoring design:** one metrics record per API question in the project's (default) **Firestore** database (Native, us-central1, free tier: 1 GiB, 20k writes / 50k reads per day), with a fixed field whitelist (no question, answer, passages or IP); structured JSON log lines with the same fields for Cloud Logging (50 GiB/month free, 30-day retention); a public **Monitoring** page in the app showing aggregates only (from `GET /stats`, token-protected, cached 5 min); 90-day retention via the API's own deletes (Firestore TTL deletes are billed); upload mode records nothing. | Cloud Run instances lose local state, so metrics need an external store; Firestore is in the same project, free at demo scale and needs no extra keys on Cloud Run. Aggregates-only on a public page keeps it a portfolio feature without exposing anyone's questions. | Decided (owner, 2026-11-04) |
@@ -712,3 +721,16 @@ sections. 2–3 resume bullets, describing only what was built.
   judge = generator rejected before any call), `src/judge.py` refuses to
   judge its own generator (was a note), `actions/cache` v4 -> v6 (Node 24),
   3 offline tests (161 pass).
+- **2026-11-09 — PR #37 merged; first `gemini-3.6-flash` answers; judge
+  search.** full-eval run #2 (3.6 + 3.7 judge): 16 answers, judge stopped at
+  once on "quota". Run #3 (3.6 + 3.5 judge): 23/65 answers, judge stopped
+  at once again. Owner's curl tests on the CI key: 3.5 answered once, then
+  429 `GenerateRequestsPerDayPerProjectPerModel-FreeTier` with "limit: 20,
+  model: gemini-3.6-flash", i.e. 3.5 shares 3.6's quota; 3.7 no response in
+  60 s; 3.1-pro limit 0; 2.5 retired; `gemma-4-31b-it` and
+  `gemini-3.1-flash-lite` answer on their own quotas. Owner chose Gemma.
+  Branch `judge-gemma`: Gemma default judge (strips `<thought>` blocks,
+  no `reasoning_effort` for Gemma, 2,048 tokens, 180 s timeout); quota
+  errors now name Google's quota id, limit and the model it counted against,
+  and a limit of 0 is reported as "no quota for this model"; 6 offline
+  tests (166 pass).

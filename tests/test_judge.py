@@ -279,3 +279,36 @@ def test_judge_refuses_to_grade_its_own_generator(monkeypatch, capsys):
     monkeypatch.setattr(jd, "JUDGE_MODEL", "gemini-3.6-flash")
     assert jd.main([]) == 2  # before loading anything or calling Gemini
     assert "D4" in capsys.readouterr().err
+
+
+# --- Gemma as judge (2026-11-09) --------------------------------------------------------------
+def test_parse_ignores_thinking_text_before_the_json():
+    reply = ('<thought>The answer says {covered}; check the passages {doc_1}.</thought>\n'
+             '{"faithfulness": 2, "correctness": 1, "reason": "partly", "unsupported_claims": []}')
+    j = jd.parse_judgment(reply)
+    assert (j["faithfulness"], j["correctness"], j["reason"]) == (2, 1, "partly")
+
+
+def test_reply_cut_off_while_thinking_is_a_parse_error():
+    with pytest.raises(jd.JudgeParseError, match="still thinking"):
+        jd.parse_judgment('<thought>Let me weigh {"faithfulness": 2')
+
+
+def test_gemma_judge_is_not_sent_reasoning_effort(monkeypatch):
+    seen = []
+
+    class _Completions:
+        def create(self, **kw):
+            seen.append(kw)
+            msg = type("M", (), {"content": "{}"})()
+            return type("R", (), {"choices": [type("C", (), {"message": msg})()]})()
+
+    client = type("Cl", (), {"chat": type("Ch", (), {"completions": _Completions()})()})()
+    monkeypatch.setattr(rp, "get_client", lambda: client)
+    monkeypatch.setattr(jd, "JUDGE_REASONING_EFFORT", "none")
+    jd.make_judge_fn("gemma-4-31b-it")([{"role": "user", "content": "x"}])
+    jd.make_judge_fn("gemini-3.1-flash-lite")([{"role": "user", "content": "x"}])
+    assert "extra_body" not in seen[0]  # Gemma rejects it with HTTP 400
+    assert seen[1]["extra_body"] == {"reasoning_effort": "none"}
+    assert seen[0]["max_tokens"] == jd.JUDGE_MAX_TOKENS >= 2048
+    assert seen[0]["timeout"] == jd.JUDGE_TIMEOUT_S >= 120  # Gemma is slow
