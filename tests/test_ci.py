@@ -204,3 +204,24 @@ def test_model_check_watches_the_fallback_model(monkeypatch, tmp_path):
     assert mc.main(["--out", str(report)]) == 0
     text = report.read_text(encoding="utf-8")  # the report is UTF-8 (em dashes); Windows defaults to cp1252
     assert "fallback: `gemini-3.7-flash` — **not available**" in text and "Action needed" in text
+
+
+def test_full_eval_can_choose_generator_and_judge_models():
+    yaml = pytest.importorskip("yaml")
+    text = (REPO_ROOT / ".github" / "workflows" / "full-eval.yml").read_text(encoding="utf-8")
+    wf = yaml.safe_load(text)
+    inputs = wf[True]["workflow_dispatch"]["inputs"]  # PyYAML reads the "on" key as True
+    assert inputs["gen_model"]["default"] == "" and inputs["judge_model"]["default"] == ""
+    steps = wf["jobs"]["eval"]["steps"]
+    names = [s.get("name") for s in steps]
+    # the choice is made before any step that calls Gemini or reads the caches
+    assert names.index("Choose models") < names.index("Answer questions")
+    choose = steps[names.index("Choose models")]["run"]
+    assert "INSURANCE_RAG_GEN_MODEL=" in choose and "INSURANCE_RAG_JUDGE_MODEL=" in choose
+    assert "GITHUB_ENV" in choose  # later steps see the same models
+
+
+def test_workflows_use_node24_cache_actions():
+    for path in (REPO_ROOT / ".github" / "workflows").glob("*.yml"):
+        text = path.read_text(encoding="utf-8")
+        assert "actions/cache/restore@v4" not in text and "actions/cache/save@v4" not in text, path.name

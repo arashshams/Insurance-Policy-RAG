@@ -18,6 +18,12 @@ on:
       judge_max_calls:
         description: "Max judge calls this run"
         default: "15"
+      gen_model:
+        description: "Generator to evaluate instead of the pinned one (e.g. gemini-3.6-flash); empty = pinned"
+        default: ""
+      judge_model:
+        description: "Judge model instead of the default; must differ from the generator (D4); empty = default"
+        default: ""
 
 concurrency:
   group: full-eval
@@ -34,19 +40,47 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       MAX_CALLS: ${{ inputs.max_calls }}
       JUDGE_MAX_CALLS: ${{ inputs.judge_max_calls }}
+      GEN_MODEL_OVERRIDE: ${{ inputs.gen_model }}
+      JUDGE_MODEL_OVERRIDE: ${{ inputs.judge_model }}
+      RUN_JUDGE: ${{ inputs.judge }}
     steps:
       - name: Require the API key
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then echo "::error::Add the GEMINI_API_KEY repository secret first."; exit 1; fi
           case "$MAX_CALLS$JUDGE_MAX_CALLS" in (*[!0-9]*|'') echo "::error::max calls must be whole numbers"; exit 1;; esac
+          case "$GEN_MODEL_OVERRIDE$JUDGE_MODEL_OVERRIDE" in (*[!a-z0-9.-]*) echo "::error::model names use only lowercase letters, digits, dots and dashes"; exit 1;; esac
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
+      - name: Choose models
+        # Answers and judgments are cached per model, so switching models
+        # never mixes them up; every later step sees the same choice.
+        run: |
+          if [ -n "$GEN_MODEL_OVERRIDE" ]; then
+            echo "INSURANCE_RAG_GEN_MODEL=$GEN_MODEL_OVERRIDE" >> "$GITHUB_ENV"
+            export INSURANCE_RAG_GEN_MODEL="$GEN_MODEL_OVERRIDE"
+          fi
+          if [ -n "$JUDGE_MODEL_OVERRIDE" ]; then
+            echo "INSURANCE_RAG_JUDGE_MODEL=$JUDGE_MODEL_OVERRIDE" >> "$GITHUB_ENV"
+            export INSURANCE_RAG_JUDGE_MODEL="$JUDGE_MODEL_OVERRIDE"
+          fi
+          python - <<'PY'
+          import os, sys
+          from src import judge as jd, rag_pipeline as rp
+          line = f"Generator: `{rp.GEN_MODEL}`; judge: `{jd.JUDGE_MODEL}`"
+          print(line)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write(line + "\n\n")
+          if os.environ.get("RUN_JUDGE") == "true" and jd.JUDGE_MODEL == rp.GEN_MODEL:
+              print("::error::The judge must differ from the generator (PLAN.md D4): "
+                    "set the judge_model input.")
+              sys.exit(1)
+          PY
       - name: Restore answer and judge caches
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             eval/questions_v2_results.json
@@ -71,7 +105,7 @@ jobs:
           code=$?; [ "$code" -eq 0 ] || [ "$code" -eq 3 ] || exit "$code"
       - name: Save caches
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             eval/questions_v2_results.json

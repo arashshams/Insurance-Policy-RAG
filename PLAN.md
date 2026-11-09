@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-11-04 (M5 done: monitoring live; short first attempt on branch `fallback-timeout`; see "Where we are")
+Last updated: 2026-11-09 (`gemini-3.8-flash` unusable for days; evaluating `gemini-3.6-flash` as the generator; see "Where we are")
 
 ---
 
@@ -43,31 +43,39 @@ Last updated: 2026-11-04 (M5 done: monitoring live; short first attempt on branc
   **First finding from the dashboard:** the backup model answered all 3
   questions on 2026-11-04 (median 21.7 s): `gemini-3.8-flash` returned slow
   503s ("high demand", 16-20 s to arrive) or timed out at 20 s, three days
-  running. Branch `fallback-timeout`: the main model's single attempt gets
-  8 s when a backup exists (`INSURANCE_RAG_PRIMARY_TIMEOUT=8` in the
-  container), so outages cost ~10 s per answer instead of ~20. Owner:
-  apply, test, PR, merge, `make deploy`, then watch the dashboard's median
+  running. PR #36: the main model's single attempt gets 8 s when a backup
+  exists (`INSURANCE_RAG_PRIMARY_TIMEOUT=8` in the container), so outages
+  should cost ~10 s per answer instead of ~20. **Live only since
+  2026-11-09** (revision `insurance-rag-api-00006-8vr`): the 2026-11-04
+  deploy ran before PR #36 was pulled. To confirm: the dashboard's median
   response time.
-- **Open question (after M1d):** if the main model keeps being overloaded,
-  consider making `gemini-3.6-flash` the main model, but only after the
-  full evaluation shows it is as good (it over-refused 2/12 on the smoke
-  subset, D19). The dashboard's backup share and latency are the evidence.
+- **Status (2026-11-09): `gemini-3.8-flash` is unusable for this project.**
+  Slow 503s and timeouts on 2026-11-02, 03 (one success), 04 and 09; the
+  full-eval run on 2026-11-09 answered 0/65; a one-word curl test got no
+  response at all in 60 s (HTTP 000), while `gemini-3.6-flash` answered in
+  2.4 s (HTTP 200). The live demo answers only through the backup.
+  **Decision in progress (D15 upgrade path):** evaluate `gemini-3.6-flash`
+  as the generator on all 65 items, judged by `gemini-3.7-flash` (pinned,
+  listed for the key on 2026-11-09, different from the generator per D4).
+  Branch `eval-model-inputs`: full-eval workflow inputs `gen_model` and
+  `judge_model`; the judge refuses to grade its own generator. If the
+  report holds up, a follow-up PR makes `gemini-3.6-flash` the main model
+  and `gemini-3.7-flash` the judge (and picks a new backup).
 - **Next items (propose plans first):**
-  1. M1d (committed v2 report + failure analysis) once the owner's daily
-     `make eval` / `make judge` runs cover all items, then the hand-scoring
-     sheet. Tip: running local evals with the CI key's project keeps the
-     live demo's 20/day quota for visitors.
-  2. M3 (MLflow tracking + threshold/k sweep, D5, D6), best after M1d's
+  1. Owner: full-eval runs with `gen_model=gemini-3.6-flash`,
+     `judge_model=gemini-3.7-flash`, judge on, ~15 calls a day each, until
+     65/65 answered and judged (about 5 days; the CI key's project has its
+     own quota, so the live demo is unaffected). Then `make judge-sheet`
+     and hand scores.
+  2. M1d (committed v2 report + failure analysis) on that run, then the
+     main-model switch if the numbers hold up.
+  3. M3 (MLflow tracking + threshold/k sweep, D5, D6), best after M1d's
      answers are cached.
-  3. Optional: re-run smoke-eval with `gen_model=gemini-3.6-flash` once to
-     see whether the fallback's two misses repeat.
-- **Owner's data collection (as quota allows; answers 9/65 on 2026-10-28):**
-  the judge model `gemini-3.6-flash` is available to the key (model check,
-  2026-10-29); daily `make eval` and `make judge` until all items are covered,
-  `make judge-sheet`, hand-score the CSV, a final `make eval` for the
-  report. Since the pinning PR, the 9 answers cached under
-  `gemini-flash-latest` are asked again once (model name is in the cache
-  key). Paste the final summary/report when done; that starts M1d.
+- **Owner's data collection:** answers cached in GitHub's Actions cache by
+  the full-eval workflow (and locally by `make eval`); both are keyed by
+  model, so the `gemini-3.8-flash` answers (9/65 locally, 0/65 in CI) stay
+  separate from the `gemini-3.6-flash` run. Paste the final summary/report
+  when done; that starts M1d.
 - **Free-tier budget:** 20 generation requests per day per project and
   model (D13). Full v2 answers need ~60, the judge up to ~47 on its own
   model's quota; the CI smoke eval up to ~12 per relevant PR. Runs resume
@@ -252,7 +260,7 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | D1 | Keep the distance threshold at **0.37**. | Latest run: near-miss out-of-scope questions overlap real ones (0.335 vs up to 0.344); lowering the cutoff would reject real questions. The model's refusal handles near-misses ("two-layer guardrail"). | Decided |
 | D2 | Raw eval cache `notebooks/eval/eval_results.json` stays git-ignored; commit a **versioned summary per run** instead (`eval/reports/<set-version>_<date>.md` + small metrics JSON). | Satisfies rule 5 without churning a large cache file. | Decided (owner, 2026-10-26) |
 | D3 | **M4 option (a):** upload mode keeps running inside the Streamlit process; the deployed API serves the bundled demo policy. | Cloud hosts may run several instances and stop idle ones, so per-session in-memory indexes on the API would vanish or hit the wrong instance. Alternatives: (b) single-instance API with expiring upload session IDs, (c) re-embed per request (private but costly). | Decided (owner, 2026-10-26) |
-| D4 | LLM judge uses a **pinned** model version, different from the generator: default `gemini-3.6-flash` (`INSURANCE_RAG_JUDGE_MODEL`). | `-latest` aliases make judge scores drift; a different model reduces self-grading bias; on the free tier each model has its own daily quota, so judging doesn't use the generator's. Still a Gemini judge of Gemini answers: agreement with the owner's hand scores is reported. A judge from another provider is a possible later upgrade. | Decided (owner, 2026-10-28) |
+| D4 | LLM judge uses a **pinned** model version, different from the generator: default `gemini-3.6-flash` (`INSURANCE_RAG_JUDGE_MODEL`). | `-latest` aliases make judge scores drift; a different model reduces self-grading bias; on the free tier each model has its own daily quota, so judging doesn't use the generator's. Still a Gemini judge of Gemini answers: agreement with the owner's hand scores is reported. A judge from another provider is a possible later upgrade. | Decided (owner, 2026-10-28) **Enforced since 2026-11-09:** `src/judge.py` and the full-eval workflow stop if the judge is the generator. For evaluating `gemini-3.6-flash` as the generator, the judge is `gemini-3.7-flash` (workflow input `judge_model`). |
 | D16 | **Pipeline fingerprint in cached answers:** each answer records a hash of the prompts, generation budget, reasoning setting, chunking and IDK string (`rag_pipeline.pipeline_fingerprint()`); a cached answer is reused only if it matches. Answers cached before this change (no fingerprint) adopt the current one once. | The cache key covered question/index/model/threshold/k but not the prompt, so editing the prompt silently reused old answers in reports and would hide regressions in CI. Adoption keeps the owner's in-progress v2 run (nothing changed since those answers). | Decided (owner, 2026-10-29) |
 | D17 | **CI evaluation design:** smoke eval of 12 items (`eval/smoke_v2.txt`, every category, edge cases of the guardrail) runs automatically on PRs touching `src/`, `eval/`, `app/demo_index/` or `requirements.txt`, always with fresh answers and `--max-calls 15`; gates: no abstain item answered, no answerable item abstained, at most 1 failed item; no judge in CI. Skips (not fails) without the secret (forks) or on a quota stop. Full eval is manual only, resumable through the GitHub cache. Model check weekly. | Catches regressions where the PR changes behaviour while keeping quota use small; strict on the guardrail, tolerant of one off answer; quota or forks never block a PR. A scheduled full eval would only re-measure the pinned, unchanged system. | Decided (owner, 2026-10-29) |
 | D20 | **Monitoring design:** one metrics record per API question in the project's (default) **Firestore** database (Native, us-central1, free tier: 1 GiB, 20k writes / 50k reads per day), with a fixed field whitelist (no question, answer, passages or IP); structured JSON log lines with the same fields for Cloud Logging (50 GiB/month free, 30-day retention); a public **Monitoring** page in the app showing aggregates only (from `GET /stats`, token-protected, cached 5 min); 90-day retention via the API's own deletes (Firestore TTL deletes are billed); upload mode records nothing. | Cloud Run instances lose local state, so metrics need an external store; Firestore is in the same project, free at demo scale and needs no extra keys on Cloud Run. Aggregates-only on a public page keeps it a portfolio feature without exposing anyone's questions. | Decided (owner, 2026-11-04) |
@@ -690,3 +698,17 @@ sections. 2–3 resume bullets, describing only what was built.
   (two slow 503s, one timeout, 18-23 s each). Branch `fallback-timeout`:
   8 s first attempt on the main model when a backup exists, 2 offline tests
   (one new, one extended).
+- **2026-11-04 — PR #36 (merged). Paused.** Done so far: M0, M1a-M1c, M2,
+  M4, M5. (The owner deployed before pulling #36, so the 8 s first attempt
+  only went live on 2026-11-09.)
+- **2026-11-09 — `gemini-3.8-flash` unusable; switch evaluation to
+  `gemini-3.6-flash`.** The full-eval workflow answered 0/65 with
+  `gemini-3.8-flash` ("generation failed"); a direct one-word curl test got
+  no response in 60 s (HTTP 000) while `gemini-3.6-flash` answered in 2.4 s.
+  Owner pulled #36 and redeployed (revision `insurance-rag-api-00006-8vr`,
+  8 s first attempt now live). Model list for the key checked; judge for
+  the new run: `gemini-3.7-flash`. Branch `eval-model-inputs`: full-eval
+  inputs `gen_model` / `judge_model` (validated, shown in the run summary,
+  judge = generator rejected before any call), `src/judge.py` refuses to
+  judge its own generator (was a note), `actions/cache` v4 -> v6 (Node 24),
+  3 offline tests (161 pass).
