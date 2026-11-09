@@ -272,3 +272,10 @@ def test_cached_records_never_call_the_api():
                 "idx", cache=cache, sleep_between=0, log=lambda _: None)
     records, total = ev.cached_records(qset, "idx", cache)
     assert [r["id"] for r in records] == ["in_01"] and total == 2
+
+
+def test_judge_refuses_to_grade_its_own_generator(monkeypatch, capsys):
+    monkeypatch.setattr(rp, "GEN_MODEL", "gemini-3.6-flash")
+    monkeypatch.setattr(jd, "JUDGE_MODEL", "gemini-3.6-flash")
+    assert jd.main([]) == 2  # before loading anything or calling Gemini
+    assert "D4" in capsys.readouterr().err

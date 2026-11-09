@@ -509,6 +509,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--force", action="store_true",
                     help="with --sheet: overwrite a human-scores CSV that already has scores")
     args = ap.parse_args(argv)
+    if not args.sheet and JUDGE_MODEL == rp.GEN_MODEL:
+        # D4: a model grading its own answers inflates the scores.
+        print(f"error: the judge model '{JUDGE_MODEL}' is also the generator. Set "
+              "INSURANCE_RAG_JUDGE_MODEL to a different pinned model (PLAN.md D4).",
+              file=sys.stderr)
+        return 2
 
     questions_path = Path(args.questions)
     qset = es.load_eval_set(questions_path)
@@ -552,9 +558,9 @@ def main(argv: list[str] | None = None) -> int:
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    if JUDGE_MODEL == rp.GEN_MODEL or rp.is_moving_alias(JUDGE_MODEL):
-        print(f"note: judge model '{JUDGE_MODEL}' should be a pinned version that differs "
-              f"from the generator ('{rp.GEN_MODEL}'); see PLAN.md D4.")
+    if rp.is_moving_alias(JUDGE_MODEL):
+        print(f"note: judge model '{JUDGE_MODEL}' should be a pinned version, not a moving "
+              "alias; see PLAN.md D4.")
     print(f"Judge: {JUDGE_MODEL}, prompt {prompt.name} ({prompt.sha})")
 
     judge_path = judge_path_for(questions_path)
