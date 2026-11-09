@@ -199,9 +199,21 @@ class GeminiQuotaExhaustedError(GeminiUnavailableError):
     Subclasses GeminiUnavailableError, so callers that handle that keep working.
     """
 
-    def __init__(self, message: str, retry_after_s: float | None = None):
+    def __init__(self, message: str, retry_after_s: float | None = None,
+                 quota: dict | None = None):
         super().__init__(message)
         self.retry_after_s = retry_after_s
+        self.quota = quota or {}
+
+
+def _quota_blob(exc) -> str:
+    import json
+
+    try:
+        blob = json.dumps(getattr(exc, "body", None), default=str)
+    except Exception:
+        blob = ""
+    return blob + " " + str(exc)
 
 
 def _quota_info(exc) -> tuple[bool, float | None]:
@@ -213,18 +225,48 @@ def _quota_info(exc) -> tuple[bool, float | None]:
     than LONG_QUOTA_RETRY_S. Parsed defensively: any format change just means
     "not recognised", which falls back to the normal retries.
     """
-    import json
     import re
 
-    try:
-        blob = json.dumps(getattr(exc, "body", None), default=str)
-    except Exception:
-        blob = ""
-    blob += " " + str(exc)
+    blob = _quota_blob(exc)
     m = re.search(r"retryDelay['\"]?\s*:\s*['\"]?(\d+(?:\.\d+)?)s", blob)
     delay = float(m.group(1)) if m else None
     long_window = "PerDay" in blob or (delay is not None and delay > LONG_QUOTA_RETRY_S)
     return long_window, delay
+
+
+def _quota_details(exc) -> dict:
+    """Which quota a 429 hit: {"id", "limit", "model"} where Gemini says so.
+
+    The model is the one whose quota counts the request, which is not always
+    the model asked for: on 2026-11-09 requests to gemini-3.5-flash were
+    counted against gemini-3.6-flash's free-tier quota."""
+    import re
+
+    blob = _quota_blob(exc)
+    out = {}
+    m = re.search(r"quotaId['\"]?\s*:\s*['\"]([\w.-]+)", blob)
+    if m:
+        out["id"] = m.group(1)
+    m = re.search(r"limit: (\d+), model: ([\w.-]+)", blob)
+    if m:
+        out["limit"], out["model"] = int(m.group(1)), m.group(2)
+    else:
+        m = re.search(r"quotaValue['\"]?\s*:\s*['\"]?(\d+)", blob)
+        if m:
+            out["limit"] = int(m.group(1))
+        m = re.search(r"quotaDimensions['\"]?\s*:\s*\{[^}]*model['\"]?\s*:\s*['\"]([\w.-]+)", blob)
+        if m:
+            out["model"] = m.group(1)
+    return out
+
+
+def _describe_quota(q: dict) -> str:
+    parts = [q["id"]] if q.get("id") else []
+    if q.get("limit") is not None:
+        parts.append(f"limit {q['limit']}")
+    if q.get("model"):
+        parts.append(f"counted against {q['model']}")
+    return f" [Gemini: {', '.join(parts)}]" if parts else ""
 
 
 def _humanize_seconds(seconds: float | None) -> str:
@@ -256,12 +298,20 @@ def _call_with_backoff(fn, what: str, max_retries: int | None = None):
         except _RETRYABLE_ERRORS as exc:
             if isinstance(exc, RateLimitError):
                 long_window, delay = _quota_info(exc)
+                quota = _quota_details(exc)
+                if quota.get("limit") == 0:
+                    raise GeminiQuotaExhaustedError(
+                        f"Gemini's free tier has no quota for this model ({what}); "
+                        "choose another model." + _describe_quota(quota),
+                        retry_after_s=None, quota=quota,
+                    ) from exc
                 if long_window:
                     raise GeminiQuotaExhaustedError(
                         f"Gemini's request quota for {what} is used up "
                         "(the free tier allows a fixed number of requests per day). "
-                        f"Please try again {_humanize_seconds(delay)}.",
-                        retry_after_s=delay,
+                        f"Please try again {_humanize_seconds(delay)}."
+                        + _describe_quota(quota),
+                        retry_after_s=delay, quota=quota,
                     ) from exc
             retries += 1
             if retries > limit:

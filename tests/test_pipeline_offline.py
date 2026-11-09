@@ -612,6 +612,41 @@ def test_long_quota_delay_fails_fast_but_short_rate_limit_is_retried(no_sleep):
     assert rp._call_with_backoff(flaky, "generation") == "ok" and flaky.calls == 2
 
 
+def _gemini_429(limit, model, quota_id="GenerateRequestsPerDayPerProjectPerModel-FreeTier"):
+    """Gemini's real 429 shape: the message names the limit and the model
+    whose quota counted the request; the details repeat it."""
+    import httpx
+    import openai
+
+    req = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
+    msg = ("You exceeded your current quota.\n* Quota exceeded for metric: generativelanguage"
+           f".googleapis.com/generate_content_free_tier_requests, limit: {limit}, model: {model}")
+    body = [{"error": {"code": 429, "message": msg, "status": "RESOURCE_EXHAUSTED", "details": [
+        {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+         "violations": [{"quotaId": quota_id, "quotaValue": str(limit),
+                         "quotaDimensions": {"location": "global", "model": model}}]},
+        {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "33000s"},
+    ]}}]
+    return openai.RateLimitError(f"Error code: 429 - {body}",
+                                 response=httpx.Response(429, request=req), body=body)
+
+
+def test_quota_error_names_the_quota_and_the_model_it_counted_against(no_sleep):
+    # Asking gemini-3.5-flash, but the request counted against gemini-3.6-flash.
+    with pytest.raises(rp.GeminiQuotaExhaustedError) as err:
+        rp._call_with_backoff(_Flaky([_gemini_429(20, "gemini-3.6-flash")], "ok"), "judging")
+    assert err.value.quota == {"id": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+                               "limit": 20, "model": "gemini-3.6-flash"}
+    assert "counted against gemini-3.6-flash" in str(err.value) and "used up" in str(err.value)
+
+
+def test_model_without_free_quota_is_reported_as_such(no_sleep):
+    flaky = _Flaky([_gemini_429(0, "gemini-3.1-pro")], "ok")
+    with pytest.raises(rp.GeminiQuotaExhaustedError, match="no quota for this model") as err:
+        rp._call_with_backoff(flaky, "judging")
+    assert flaky.calls == 1 and err.value.retry_after_s is None  # waiting won't help
+
+
 def test_client_leaves_retries_to_the_pipeline(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test")
     assert rp.get_client().max_retries == 0
