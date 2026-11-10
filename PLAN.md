@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-11-09 (evaluating `gemini-3.6-flash` as the generator, judged by `gemma-4-31b-it`; see "Where we are")
+Last updated: 2026-11-10 (paused; evaluating `gemini-3.6-flash` as the generator, judged by `gemma-4-31b-it`; see "Where we are")
 
 ---
 
@@ -65,12 +65,19 @@ Last updated: 2026-11-09 (evaluating `gemini-3.6-flash` as the generator, judged
   retired for new users. Branch `judge-gemma`: Gemma is the default judge.
   If the report holds up, a follow-up PR makes `gemini-3.6-flash` the main
   model (and picks a new backup).
-- **Progress of the 3.6 run (CI cache):** 23/65 answered on 2026-11-09
-  (20 pass; `para_03` and `para_08` stopped by the 0.37 distance threshold
-  at 0.388 and 0.370, `para_06` cited passages without the evidence);
-  0 judged (the 3.5 / 3.7 judge attempts hit the quota problem above).
+- **Progress of the 3.6 run (CI cache):** 27/65 answered, 15/25 eligible
+  judged (2026-11-10, run #4). Answer misses so far: `para_03`, `para_08`
+  (0.37 distance threshold, at 0.388 and 0.370), `para_06`, `num_08`
+  (cited passages lack the evidence phrase). **Gemma judge works:** 15
+  replies, none unreadable, ~70 s per call; 14 scored 2/2, `fact_05`
+  correctness 1 ("vaguer than the reference"). For M1d: `para_06` fails the
+  evidence check but Gemma scored it 2/2 (evidence phrase too strict, or
+  judge too lenient; the hand-scoring sheet decides). **`gemini-3.6-flash`
+  was overloaded too on 2026-11-10** (503 after 5 retries, only 4 new
+  answers): weigh that before making it the main model.
 - **Next items (propose plans first):**
-  1. Owner (after merging `judge-gemma`): daily full-eval runs with
+  1. Owner: daily full-eval runs (re-run the same day if it stopped on
+     "temporarily unavailable"; failed calls don't use the quota) with
      `gen_model=gemini-3.6-flash`, `judge_model` empty (Gemma), judge on,
      max calls 15 each, until
      65/65 answered and judged (about 5 days; the CI key's project has its
@@ -734,3 +741,8 @@ sections. 2–3 resume bullets, describing only what was built.
   errors now name Google's quota id, limit and the model it counted against,
   and a limit of 0 is reported as "no quota for this model"; 6 offline
   tests (166 pass).
+- **2026-11-10 — PR #38 merged; first judged answers. Paused.** Run #4
+  (3.6 + Gemma): judge 15/15 parsed (14 at 2/2, `fact_05` correctness 1);
+  answers 23 -> 27/65, stopped by `gemini-3.6-flash` overload (503 after 5
+  retries). Next: same run again (judge_max_calls 10 covers the rest of the
+  eligible answers), daily until 65/65 answered and judged.
