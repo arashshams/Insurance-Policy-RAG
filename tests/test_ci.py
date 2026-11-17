@@ -225,3 +225,18 @@ def test_workflows_use_node24_cache_actions():
     for path in (REPO_ROOT / ".github" / "workflows").glob("*.yml"):
         text = path.read_text(encoding="utf-8")
         assert "actions/cache/restore@v4" not in text and "actions/cache/save@v4" not in text, path.name
+
+
+def test_full_eval_nightly_schedule_evaluates_the_candidate_with_the_judge():
+    # Temporary (PLAN.md 2026-11-17): remove with the schedule once 65/65 are judged.
+    yaml = pytest.importorskip("yaml")
+    wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "full-eval.yml")
+                        .read_text(encoding="utf-8"))
+    crons = [c["cron"] for c in wf[True]["schedule"]]
+    assert len(crons) == 2 and all(c.split()[0] != "0" for c in crons)  # off the busy :00
+    env = wf["jobs"]["eval"]["env"]
+    assert "github.event_name == 'schedule' && 'gemini-3.6-flash'" in env["GEN_MODEL_OVERRIDE"]
+    assert "github.event_name == 'schedule'" in env["RUN_JUDGE"]
+    assert "|| '15'" in env["MAX_CALLS"] and "|| '15'" in env["JUDGE_MAX_CALLS"]
+    judge = next(s for s in wf["jobs"]["eval"]["steps"] if s.get("name") == "Judge answers")
+    assert judge["if"] == "env.RUN_JUDGE == 'true'"  # inputs.judge is empty on a schedule

@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-11-10 (paused; evaluating `gemini-3.6-flash` as the generator, judged by `gemma-4-31b-it`; see "Where we are")
+Last updated: 2026-11-17 (nightly full-eval runs; evaluating `gemini-3.6-flash` as the generator, judged by `gemma-4-31b-it`; see "Where we are")
 
 ---
 
@@ -65,19 +65,27 @@ Last updated: 2026-11-10 (paused; evaluating `gemini-3.6-flash` as the generator
   retired for new users. Branch `judge-gemma`: Gemma is the default judge.
   If the report holds up, a follow-up PR makes `gemini-3.6-flash` the main
   model (and picks a new backup).
-- **Progress of the 3.6 run (CI cache):** 27/65 answered, 15/25 eligible
-  judged (2026-11-10, run #4). Answer misses so far: `para_03`, `para_08`
+- **Progress of the 3.6 run (CI cache):** 36/65 answered, 29/33 eligible
+  judged (2026-11-17, run #6). Answer misses so far: `para_03`, `para_08`
   (0.37 distance threshold, at 0.388 and 0.370), `para_06`, `num_08`
-  (cited passages lack the evidence phrase). **Gemma judge works:** 15
-  replies, none unreadable, ~70 s per call; 14 scored 2/2, `fact_05`
-  correctness 1 ("vaguer than the reference"). For M1d: `para_06` fails the
-  evidence check but Gemma scored it 2/2 (evidence phrase too strict, or
-  judge too lenient; the hand-scoring sheet decides). **`gemini-3.6-flash`
-  was overloaded too on 2026-11-10** (503 after 5 retries, only 4 new
-  answers): weigh that before making it the main model.
+  (cited passages lack the evidence phrase). **Gemma judge works:** ~70-90 s
+  per call; most answers 2/2; correctness 1 with specific reasons on
+  `fact_05`, `num_07` ("omits the required documentation"), `multi_05`
+  ("misses the prior approval requirement"); one unreadable reply
+  (`para_07`, no JSON; retried automatically). **For M1d:** `para_06` and
+  `num_08` fail the evidence check but Gemma scored both 2/2: the evidence
+  phrases may be too strict (or the judge too lenient); the hand-scoring
+  sheet decides. **`gemini-3.6-flash` was overloaded on 3 of 4 days tried**
+  (2026-11-10, 16, 17: 503 after 5 retries, 2-7 new answers per run):
+  weigh that before making it the main model.
+- **Temporary nightly schedule (branch `nightly-eval`):** full-eval runs
+  itself at ~1:17 and ~4:17 am Pacific with `gen_model=gemini-3.6-flash`,
+  judge on (Gemma), 15/15 calls, so the evaluation finishes at quiet hours
+  without the owner starting it. Remove the `schedule:` block (and its test
+  in `tests/test_ci.py`) once 65/65 are answered and judged.
 - **Next items (propose plans first):**
-  1. Owner: daily full-eval runs (re-run the same day if it stopped on
-     "temporarily unavailable"; failed calls don't use the quota) with
+  1. Nightly scheduled runs (owner checks the morning's runs; manual runs
+     still possible) with
      `gen_model=gemini-3.6-flash`, `judge_model` empty (Gemma), judge on,
      max calls 15 each, until
      65/65 answered and judged (about 5 days; the CI key's project has its
@@ -746,3 +754,10 @@ sections. 2–3 resume bullets, describing only what was built.
   answers 23 -> 27/65, stopped by `gemini-3.6-flash` overload (503 after 5
   retries). Next: same run again (judge_max_calls 10 covers the rest of the
   eligible answers), daily until 65/65 answered and judged.
+- **2026-11-16/17 — runs #5 and #6; nightly schedule.** #5: 27 -> 34
+  answers (all 7 new pass), judge 0 (Gemma overloaded too). #6: 34 -> 36
+  answers, judge 15 -> 29 (14 new; `para_07` unreadable, retried next run).
+  3.6 overloaded on both days. Owner approved a temporary nightly schedule:
+  branch `nightly-eval` (two runs a night at quiet hours, 3.6 + Gemma,
+  timeout 90 min, judge step keyed on `RUN_JUDGE` so scheduled runs judge
+  too), 1 offline test (167 pass), actionlint clean.
