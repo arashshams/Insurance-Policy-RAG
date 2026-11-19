@@ -199,6 +199,32 @@ def parse_judgment(text: str) -> dict:
     }
 
 
+class JudgeReply(str):
+    """The judge's reply text, plus why the model stopped ("stop", "length")."""
+
+    finish_reason: str | None = None
+
+
+# Added to the request when a reply had no readable JSON (asked once per run).
+JSON_REMINDER = ("IMPORTANT: your previous reply could not be read. Reply with only the "
+                 "JSON object described above: no other text before or after it.")
+
+
+def with_json_reminder(messages: list[dict]) -> list[dict]:
+    out = [dict(m) for m in messages]
+    out[-1]["content"] = out[-1]["content"] + "\n\n" + JSON_REMINDER
+    return out
+
+
+def describe_reply(reply: str, limit: int = 300) -> str:
+    """Why a reply was unreadable, for the log: how the model stopped, its
+    length and its start (eval answers about the bundled demo policy only)."""
+    text = " ".join((reply or "").split())
+    snippet = text[:limit] + ("..." if len(text) > limit else "")
+    finish = getattr(reply, "finish_reason", None) or "unknown"
+    return f"finish_reason={finish}, {len(reply or '')} chars, starts: {snippet!r}"
+
+
 def make_judge_fn(model: str = JUDGE_MODEL) -> Callable[[list[dict]], str]:
     """messages -> reply text, through the pipeline's client and retry policy
     (a used-up daily quota raises GeminiQuotaExhaustedError at once)."""
@@ -212,7 +238,10 @@ def make_judge_fn(model: str = JUDGE_MODEL) -> Callable[[list[dict]], str]:
         if extra_body:
             kwargs["extra_body"] = extra_body
         resp = rp._call_with_backoff(lambda: client.chat.completions.create(**kwargs), "judging")
-        return resp.choices[0].message.content or ""
+        choice = resp.choices[0]
+        reply = JudgeReply(choice.message.content or "")
+        reply.finish_reason = getattr(choice, "finish_reason", None)
+        return reply
     return judge
 
 
@@ -252,20 +281,30 @@ def run_judge(
         if stats["stop_reason"] is not None:
             stats["remaining"].append(rec["id"])
             continue
-        try:
-            reply = judge_fn(render_messages(prompt, item, rec, chunk_texts))
-        except rp.GeminiQuotaExhaustedError as exc:
-            stats["stop_reason"], stats["retry_after_s"] = str(exc), exc.retry_after_s
+        messages = render_messages(prompt, item, rec, chunk_texts)
+        judgment = None
+        for attempt in (1, 2):  # an unreadable reply is asked again once, with a reminder
+            try:
+                reply = judge_fn(messages if attempt == 1 else with_json_reminder(messages))
+            except rp.GeminiQuotaExhaustedError as exc:
+                stats["stop_reason"], stats["retry_after_s"] = str(exc), exc.retry_after_s
+                log(f"STOP {rec['id']}: {exc}")
+                break
+            stats["calls"] += 1
+            try:
+                judgment = parse_judgment(reply)
+                break
+            except JudgeParseError as exc:
+                retry = attempt == 1 and (max_calls is None or stats["calls"] < max_calls)
+                log(f"JUDGE {rec['id']}: unreadable reply ({exc}; {describe_reply(reply)}); "
+                    + ("asking again with a JSON-only reminder" if retry
+                       else "will retry next run"))
+                if not retry:
+                    break
+        if judgment is None:
+            if stats["stop_reason"] is None:
+                stats["parse_errors"].append(rec["id"])
             stats["remaining"].append(rec["id"])
-            log(f"STOP {rec['id']}: {exc}")
-            continue
-        stats["calls"] += 1
-        try:
-            judgment = parse_judgment(reply)
-        except JudgeParseError as exc:
-            stats["parse_errors"].append(rec["id"])
-            stats["remaining"].append(rec["id"])
-            log(f"JUDGE {rec['id']}: unreadable reply ({exc}); will retry next run")
         else:
             cache[key] = {**judgment, "id": rec["id"], "model": model,
                           "prompt": prompt.name, "prompt_sha": prompt.sha,
