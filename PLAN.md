@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-11-17 (nightly full-eval runs; evaluating `gemini-3.6-flash` as the generator, judged by `gemma-4-31b-it`; see "Where we are")
+Last updated: 2026-11-19 (64/65 answered, 38/39 judged; evaluating `gemini-3.6-flash` as the generator, judged by `gemma-4-31b-it`; see "Where we are")
 
 ---
 
@@ -65,20 +65,24 @@ Last updated: 2026-11-17 (nightly full-eval runs; evaluating `gemini-3.6-flash` 
   retired for new users. Branch `judge-gemma`: Gemma is the default judge.
   If the report holds up, a follow-up PR makes `gemini-3.6-flash` the main
   model (and picks a new backup).
-- **Progress of the 3.6 run (CI cache):** 36/65 answered, 29/33 eligible
-  judged (2026-11-17, run #6). Answer misses so far: `para_03`, `para_08`
-  (0.37 distance threshold, at 0.388 and 0.370), `para_06`, `num_08`
-  (cited passages lack the evidence phrase). **Gemma judge works:** ~70-90 s
-  per call; most answers 2/2; correctness 1 with specific reasons on
-  `fact_05`, `num_07` ("omits the required documentation"), `multi_05`
-  ("misses the prior approval requirement"); one unreadable reply
-  (`para_07`, no JSON; retried automatically). **For M1d:** `para_06` and
-  `num_08` fail the evidence check but Gemma scored both 2/2: the evidence
-  phrases may be too strict (or the judge too lenient); the hand-scoring
-  sheet decides. **`gemini-3.6-flash` was overloaded on 3 of 4 days tried**
-  (2026-11-10, 16, 17: 503 after 5 retries, 2-7 new answers per run):
-  weigh that before making it the main model.
-- **Temporary nightly schedule (branch `nightly-eval`):** full-eval runs
+- **Progress of the 3.6 run (CI cache, 2026-11-19, runs #7-#10):** 64/65
+  answered, 38/39 eligible judged. Judge-free: 52/61 pass at run #7;
+  **guardrail perfect so far** (all 16 out-of-scope / near-miss /
+  adversarial abstentions correct). Misses: **over-refusal** by the model on
+  `span_04`, `defer_01`, `adv_02`, `adv_04` (`defer_01` and `adv_02` are the
+  same two misses as the 2026-11-03 smoke check: a consistent trait of 3.6);
+  **distance threshold** on `para_03`, `para_08`, `span_03` (0.388, 0.370,
+  0.374; but `near_08` 0.384 and `adv_01` 0.397 must abstain, so raising
+  the threshold is a trade-off for M3's sweep); **evidence check** on
+  `para_06`, `num_08` (Gemma scored both 2/2: evidence phrases may be too
+  strict). Gemma correctness 1 (specific omissions) on `fact_05`, `num_07`,
+  `multi_05`, `span_01`, `defer_03`, `adv_05`; everything else judged 2/2.
+  `span_05`: Gemma reply unreadable (no JSON) on three runs in a row.
+  3.6 overloaded on most daytime runs; the daily quota (20) is also hit
+  after ~14 successful calls, so failed attempts seem to count too.
+- **Temporary nightly schedule (PR #40):** GitHub started the first two
+  runs ~9 hours late (10:07 am and 12:35 pm Pacific), so they shared the
+  day's quota with a manual run. full-eval runs
   itself at ~1:17 and ~4:17 am Pacific with `gen_model=gemini-3.6-flash`,
   judge on (Gemma), 15/15 calls, so the evaluation finishes at quiet hours
   without the owner starting it. Remove the `schedule:` block (and its test
@@ -761,3 +765,13 @@ sections. 2–3 resume bullets, describing only what was built.
   branch `nightly-eval` (two runs a night at quiet hours, 3.6 + Gemma,
   timeout 90 min, judge step keyed on `RUN_JUDGE` so scheduled runs judge
   too), 1 offline test (167 pass), actionlint clean.
+
+- **2026-11-18/19 — runs #7-#10: 64/65 answered, 38/39 judged.** #7
+  (manual) 36 -> 61 answers (out-of-scope items abstain at the threshold
+  without a call), quota error now names "limit 20, counted against
+  gemini-3.6-flash". #8/#9 (first scheduled runs, ~9 h late) 61 -> 64, then
+  quota. #10 (manual): last answer hit 3.6 overload. `span_05` unreadable
+  from Gemma for the third time. Branch `judge-retry`: an unreadable reply
+  is asked again once in the same run with a JSON-only reminder; the log
+  shows finish_reason, length and the start of the reply; 4 offline tests
+  (one replaced; 170 pass).

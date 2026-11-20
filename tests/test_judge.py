@@ -138,14 +138,44 @@ def test_judge_caches_and_rejudges_only_what_changed(prompt):
     assert _run(recs, fn, cache, other)["calls"] == 3  # new prompt version re-judges
 
 
-def test_unreadable_reply_is_retried_next_run(prompt):
-    replies = iter(["garbage", _reply(2, 2), _reply(2, 2), _reply(1, 2)])
+def test_unreadable_reply_is_asked_again_once_then_next_run(prompt):
+    # a1: unreadable twice (asked again in the same run), then judged next run
+    replies = iter(["garbage", "still garbage", _reply(2, 2), _reply(2, 2), _reply(1, 2)])
+    seen = []
+    fn = lambda m: (seen.append(m), next(replies))[1]  # noqa: E731
     cache, recs = {}, _records()
-    stats = _run(recs, lambda m: next(replies), cache, prompt)
+    stats = _run(recs, fn, cache, prompt)
     assert stats["parse_errors"] == ["a1"] and stats["remaining"] == ["a1"]
-    assert stats["judged"] == 2
-    stats = _run(recs, lambda m: next(replies), cache, prompt)
+    assert stats["judged"] == 2 and stats["calls"] == 4
+    assert jd.JSON_REMINDER in seen[1][-1]["content"]  # the second ask carries the reminder
+    assert jd.JSON_REMINDER not in seen[0][-1]["content"]
+    stats = _run(recs, fn, cache, prompt)
     assert stats["calls"] == 1 and stats["judged"] == 3 and not stats["remaining"]
+
+
+def test_reminder_usually_fixes_an_unreadable_reply(prompt):
+    replies = iter(["<thought>long musing without the scores", _reply(2, 1),
+                    _reply(2, 2), _reply(2, 2)])
+    logs = []
+    cache, recs = {}, _records()
+    stats = jd.run_judge(recs, ITEMS, CHUNKS, lambda m: next(replies), cache, prompt, "judge-m",
+                         sleep_between=0, log=logs.append, clock=lambda: 1.0)
+    assert stats["judged"] == 3 and not stats["parse_errors"] and stats["calls"] == 4
+    assert any("asking again" in line and "starts:" in line for line in logs)
+
+
+def test_no_second_ask_beyond_the_call_budget(prompt):
+    cache, recs = {}, _records()
+    stats = _run(recs, lambda m: "garbage", cache, prompt, max_calls=1)
+    assert stats["calls"] == 1 and stats["parse_errors"] == ["a1"]
+
+
+def test_unreadable_reply_log_says_how_the_model_stopped():
+    reply = jd.JudgeReply("thinking " * 100)
+    reply.finish_reason = "length"
+    text = jd.describe_reply(reply, limit=20)
+    assert "finish_reason=length" in text and "900 chars" in text and text.endswith("...'")
+    assert "finish_reason=unknown" in jd.describe_reply("plain")
 
 
 def test_budget_and_quota_stop_the_run(prompt):
