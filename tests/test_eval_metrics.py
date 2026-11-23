@@ -205,7 +205,7 @@ def test_v1_set_converts_to_items():
     assert {(i["category"], i["behavior"]) for i in items} == {
         ("in_scope", "answer"), ("out_of_scope", "abstain")}
     v2 = es.load_eval_set(es.DEFAULT_SET)
-    assert not es.is_v1(v2) and es.set_version(v2) == "v2.0" and len(es.items_of(v2)) == 65
+    assert not es.is_v1(v2) and es.set_version(v2) == "v2.1" and len(es.items_of(v2)) == 65
 
 
 # --- the harness on eval set v2 (fake answers, real demo-index chunks) ----------------------

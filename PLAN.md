@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-11-19 (64/65 answered, 38/39 judged; evaluating `gemini-3.6-flash` as the generator, judged by `gemma-4-31b-it`; see "Where we are")
+Last updated: 2026-11-23 (M1d: first full v2 report committed; evaluating `gemini-3.6-flash` as the generator, judged by `gemma-4-31b-it`; see "Where we are")
 
 ---
 
@@ -65,45 +65,43 @@ Last updated: 2026-11-19 (64/65 answered, 38/39 judged; evaluating `gemini-3.6-f
   retired for new users. Branch `judge-gemma`: Gemma is the default judge.
   If the report holds up, a follow-up PR makes `gemini-3.6-flash` the main
   model (and picks a new backup).
-- **Progress of the 3.6 run (CI cache, 2026-11-19, runs #7-#10):** 64/65
-  answered, 38/39 eligible judged. Judge-free: 52/61 pass at run #7;
-  **guardrail perfect so far** (all 16 out-of-scope / near-miss /
-  adversarial abstentions correct). Misses: **over-refusal** by the model on
-  `span_04`, `defer_01`, `adv_02`, `adv_04` (`defer_01` and `adv_02` are the
-  same two misses as the 2026-11-03 smoke check: a consistent trait of 3.6);
-  **distance threshold** on `para_03`, `para_08`, `span_03` (0.388, 0.370,
-  0.374; but `near_08` 0.384 and `adv_01` 0.397 must abstain, so raising
-  the threshold is a trade-off for M3's sweep); **evidence check** on
-  `para_06`, `num_08` (Gemma scored both 2/2: evidence phrases may be too
-  strict). Gemma correctness 1 (specific omissions) on `fact_05`, `num_07`,
-  `multi_05`, `span_01`, `defer_03`, `adv_05`; everything else judged 2/2.
-  `span_05`: Gemma reply unreadable (no JSON) on three runs in a row.
-  3.6 overloaded on most daytime runs; the daily quota (20) is also hit
-  after ~14 successful calls, so failed attempts seem to count too.
-- **Temporary nightly schedule (PR #40):** GitHub started the first two
-  runs ~9 hours late (10:07 am and 12:35 pm Pacific), so they shared the
-  day's quota with a manual run. full-eval runs
-  itself at ~1:17 and ~4:17 am Pacific with `gen_model=gemini-3.6-flash`,
-  judge on (Gemma), 15/15 calls, so the evaluation finishes at quiet hours
-  without the owner starting it. Remove the `schedule:` block (and its test
-  in `tests/test_ci.py`) once 65/65 are answered and judged.
-- **Next items (propose plans first):**
-  1. Nightly scheduled runs (owner checks the morning's runs; manual runs
-     still possible) with
-     `gen_model=gemini-3.6-flash`, `judge_model` empty (Gemma), judge on,
-     max calls 15 each, until
-     65/65 answered and judged (about 5 days; the CI key's project has its
-     own quota, so the live demo is unaffected). Then `make judge-sheet`
-     and hand scores.
-  2. M1d (committed v2 report + failure analysis) on that run, then the
-     main-model switch if the numbers hold up.
-  3. M3 (MLflow tracking + threshold/k sweep, D5, D6), best after M1d's
-     answers are cached.
-- **Owner's data collection:** answers cached in GitHub's Actions cache by
-  the full-eval workflow (and locally by `make eval`); both are keyed by
-  model, so the `gemini-3.8-flash` answers (9/65 locally, 0/65 in CI) stay
-  separate from the `gemini-3.6-flash` run. Paste the final summary/report
-  when done; that starts M1d.
+- **First complete v2 run (2026-11-22, `gemini-3.6-flash`, judge Gemma):**
+  committed as `eval/reports/v2.0_2026-11-22.md` (+ `.json`) with a written
+  failure analysis, `eval/reports/v2.0_2026-11-22_analysis.md`.
+  - **Headline:** 55/65 pass (85%); judge: 40/40 fully faithful,
+    **hallucination 0%**, 82% fully correct (the rest 1/2, incomplete);
+    guardrail 17/18 (the 18th, `adv_06`, refused in its own words, a
+    scoring artifact of the exact-"I don't know" rule).
+  - **Failures:** 4 model over-refusals (`span_04`, `defer_01`, `adv_02`,
+    `adv_04`; stable, same as the 2026-11-03 smoke check); 3 threshold
+    misses at 0.370-0.388 (an overlap with should-abstain items, for M3);
+    2 labelling gaps (`para_06`, `num_08`: correct answers citing another
+    valid passage), fixed in **eval set v2.1** (alternative evidence only:
+    cached answers and judgments still valid, no API calls to re-score).
+  - **The 2026-11-17 nightly schedule is removed** (65/65 done). Its runs
+    started hours late (GitHub delays scheduled jobs), but they finished
+    the run. full-eval now also uploads the answer and judge caches
+    (`eval-data` artifact) for local hand-scoring.
+- **Next items:**
+  1. Owner, after merging `m1d-report`: one full-eval run with
+     `gen_model=gemini-3.6-flash`, judge ticked, `max_calls` 0,
+     `judge_max_calls` 0. No API calls; it produces the v2.1 report and
+     the `eval-data` artifact.
+  2. Owner: hand scores. Put `questions_v2_results.json` and
+     `questions_v2_judge.json` from `eval-data` into `eval/`, then
+     `INSURANCE_RAG_GEN_MODEL=gemini-3.6-flash make judge-sheet`. Score
+     about 20 items in `eval/questions_v2_human_scores.csv` (guide:
+     `eval/questions_v2_judge_sheet.md`), then
+     `INSURANCE_RAG_GEN_MODEL=gemini-3.6-flash make eval` (no API calls once
+     every item is cached; needs the key set only for the start-up check).
+     The report then shows judge-human agreement; commit it as the M1d
+     final report.
+  3. PR: `gemini-3.6-flash` becomes the main model (D15 upgrade path;
+     no v2 baseline for 3.8 exists, it was never available long enough).
+     New backup: not `gemini-3.5-flash` (shares 3.6's quota); candidate
+     `gemini-3.1-flash-lite` (own quota, answered in 2 s on 2026-11-09)
+     after one smoke-eval check. README headline numbers; `make deploy`.
+  4. M3 (MLflow tracking + threshold/k sweep, D5, D6) on the cached answers.
 - **Free-tier budget:** 20 generation requests per day per project and
   model (D13). Full v2 answers need ~60, the judge up to ~47 on its own
   model's quota; the CI smoke eval up to ~12 per relevant PR. Runs resume
@@ -341,7 +339,7 @@ point to `master`; `requirements.txt` pinned.
 Acceptance: `make setup test lint` works on Linux/macOS and in CI; README
 "Getting started" mentions the Makefile and the plain commands.
 
-### M1. Evaluation 2.0 (highest priority) — `[~]` (M1a, M1b done; first v2 run in progress; M1c–M1d next)
+### M1. Evaluation 2.0 (highest priority) — `[~]` (M1a-M1c done; M1d in progress: first full v2 report committed, hand scores next)
 
 **M1a — eval set v2 (data only).** `[x]` merged as PR #22.
 - [x] `eval/questions_v2.json`: 65 items (42 answer, 5 defer, 18 abstain).
@@ -414,9 +412,17 @@ commits: the feature and a log-wording fix for an existing test).
 - [ ] Owner: `make test lint`, merge; confirm the judge model's free quota;
   run `make judge`, `make judge-sheet`, hand-score, `make eval`.
 
-**M1d — committed report + failure analysis.**
-- `eval/reports/<set-version>_<date>.md` (+ metrics JSON) per D2; README
-  links the latest report.
+**M1d — committed report + failure analysis.** `[~]` (branch `m1d-report`)
+- [x] `eval/reports/v2.0_2026-11-22.md` + `.json`: first complete v2 run
+  (`gemini-3.6-flash`, judge Gemma), from the full-eval artifact.
+- [x] `eval/reports/v2.0_2026-11-22_analysis.md`: the 10 failures by cause,
+  judge notes, implications, limitations.
+- [x] Eval set v2.1: alternative evidence for `para_06`, `num_08`.
+- [x] full-eval: nightly schedule removed; `eval-data` artifact (caches).
+- [ ] v2.1 report (no API calls) + owner's hand scores -> judge-human
+  agreement; commit as the final M1d report.
+- [ ] README links the latest report; headline numbers (with the model
+  switch PR).
 
 Acceptance: one command produces the full report; every number in the
 README traces to a committed report.
@@ -775,3 +781,12 @@ sections. 2–3 resume bullets, describing only what was built.
   is asked again once in the same run with a JSON-only reminder; the log
   shows finish_reason, length and the start of the reply; 4 offline tests
   (one replaced; 170 pass).
+- **2026-11-23 — first complete v2 run; M1d started.** Runs #11-#18
+  (scheduled, started hours late) finished it: 65/65 answered, 40/40
+  eligible judged (`span_05` judged after the PR #41 reminder). Owner
+  downloaded the `eval-report` artifact. Branch `m1d-report`: report +
+  metrics committed, written failure analysis, eval set v2.1 (two
+  alternative evidence phrases), nightly schedule removed, `eval-data`
+  artifact; offline tests updated (170 pass), actionlint clean.
+  Recommendation (owner to confirm in the next PR): `gemini-3.6-flash` as
+  the main model.
