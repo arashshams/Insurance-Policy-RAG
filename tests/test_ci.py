@@ -239,3 +239,14 @@ def test_full_eval_is_manual_only_and_uploads_the_caches():
     assert "questions_v2_judge.json" in data["with"]["path"]
     judge = next(s for s in steps if s.get("name") == "Judge answers")
     assert judge["if"] == "env.RUN_JUDGE == 'true'"
+
+
+def test_index_label_uses_forward_slashes_on_windows_too():
+    # Caches made in CI ("app/demo_index") must be found on Windows, where
+    # str(path) would give "app\demo_index" and change every cache key.
+    from pathlib import PureWindowsPath
+
+    root = PureWindowsPath(r"C:\Users\me\Downloads\RAG")
+    assert ev._relative_label(root / "app" / "demo_index", root) == "app/demo_index"
+    assert ev._relative_label(PureWindowsPath(r"D:\idx"), root) == "D:/idx"
+    assert ev.index_label_for(ev.DEFAULT_INDEX) == "app/demo_index"
