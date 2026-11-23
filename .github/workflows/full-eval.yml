@@ -3,17 +3,12 @@ name: full-eval
 # Full evaluation on demand (Actions tab -> full-eval -> Run workflow).
 # Answer and judge caches persist between runs (GitHub cache), so a run that
 # stops on the daily quota or an overload continues next time. The report is
-# uploaded as an artifact; committing it stays a deliberate step.
-#
-# TEMPORARY nightly schedule (PLAN.md, 2026-11-17): completes the
-# gemini-3.6-flash evaluation (judge: default Gemma) at quiet hours, because
-# 3.6 returned overload errors on most daytime runs. Failed calls don't use
-# quota and finished items are cached, so a run with nothing left to do makes
-# no calls. Remove the schedule once 65/65 are answered and judged.
+# uploaded as an artifact; committing it stays a deliberate step. The answer
+# and judge caches are uploaded too (eval-data), so the hand-scoring sheet and
+# the report can be rebuilt locally without new API calls.
+# (A temporary nightly schedule finished the first gemini-3.6-flash run,
+# 2026-11-17 to 22; removed in M1d.)
 on:
-  schedule:
-    - cron: "17 9 * * *"   # ~1:17 am Pacific (PST)
-    - cron: "17 12 * * *"  # ~4:17 am Pacific (PST)
   workflow_dispatch:
     inputs:
       max_calls:
@@ -46,12 +41,11 @@ jobs:
     timeout-minutes: 90
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      # Scheduled runs have no inputs: they use these defaults.
-      MAX_CALLS: ${{ inputs.max_calls || '15' }}
-      JUDGE_MAX_CALLS: ${{ inputs.judge_max_calls || '15' }}
-      GEN_MODEL_OVERRIDE: ${{ github.event_name == 'schedule' && 'gemini-3.6-flash' || inputs.gen_model }}
+      MAX_CALLS: ${{ inputs.max_calls }}
+      JUDGE_MAX_CALLS: ${{ inputs.judge_max_calls }}
+      GEN_MODEL_OVERRIDE: ${{ inputs.gen_model }}
       JUDGE_MODEL_OVERRIDE: ${{ inputs.judge_model }}
-      RUN_JUDGE: ${{ github.event_name == 'schedule' || inputs.judge }}
+      RUN_JUDGE: ${{ inputs.judge }}
     steps:
       - name: Require the API key
         run: |
@@ -125,4 +119,12 @@ jobs:
         with:
           name: eval-report
           path: eval/reports/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: eval-data
+          path: |
+            eval/questions_v2_results.json
+            eval/questions_v2_judge.json
           if-no-files-found: ignore

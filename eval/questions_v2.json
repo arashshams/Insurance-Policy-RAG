@@ -1,9 +1,9 @@
 {
-  "version": "2.0",
+  "version": "2.1",
   "created": "2026-10-26",
   "source_document": "Manulife FlexCare SAMPLE policy (32 pages), as indexed in app/demo_index",
   "idk_answer": "I don't know",
-  "description": "Evaluation set v2. Supersedes notebooks/eval/eval_questions.json (v1) once the harness switches over in M1b; every v1 question is carried over and keeps its v1 id in `v1_id`. Ground truth was drafted from the demo index text and reviewed by the project owner. Evidence phrases are checked against the index by tests/test_eval_set.py.",
+  "description": "Evaluation set v2. Supersedes notebooks/eval/eval_questions.json (v1) once the harness switches over in M1b; every v1 question is carried over and keeps its v1 id in `v1_id`. Ground truth was drafted from the demo index text and reviewed by the project owner. Evidence phrases are checked against the index by tests/test_eval_set.py. v2.1 (2026-11-23, M1d failure analysis): alternative evidence phrases for para_06 (page 24, conversion privilege) and num_08 (page 16, coverage expires on the 70th birthday); both answers were correct but cited a different valid passage than the one labelled. Questions, behaviours and reference answers are unchanged, so cached answers and judgments stay valid.",
   "behaviors": {
     "answer": "Answer from the policy and cite a passage on one of expected_pages.",
     "defer": "The policy defers the specific amount or detail to the Schedule of Benefits (not part of this document). A correct answer says so and cites the deferring passage; 'I don't know' is wrong.",
@@ -147,7 +147,8 @@
       "question": "Are my kids still covered once they turn 21?",
       "expected_pages": [5, 24, 28],
       "reference_answer": "No. An insured child must be removed from the policy when they turn 21, but they can convert to their own policy if Manulife is contacted within 30 days of the coverage ending.",
-      "evidence": [{"page": 5, "text": "an insured child turns 21, gets married, becomes an orphan, or obtains full -time employment"}],
+      "evidence": [{"page": 5, "text": "an insured child turns 21, gets married, becomes an orphan, or obtains full -time employment"},
+                   {"page": 24, "text": "for a dependent upon attainment of age 21, marriage, becoming an orphan, or obtaining employment, they may continue their own coverage under a separate policy"}],
       "expected_keywords": ["21"]
     },
     {
@@ -227,7 +228,8 @@
       "question": "Up to what age is emergency medical travel coverage available?",
       "expected_pages": [15, 16],
       "reference_answer": "It is only available to those under age 70; coverage expires on the insured's 70th birthday.",
-      "evidence": [{"page": 15, "text": "is only available to those under age 70"}],
+      "evidence": [{"page": 15, "text": "is only available to those under age 70"},
+                   {"page": 16, "text": "when coverage expires on your 70th birthday"}],
       "expected_keywords": ["70"]
     },
     {
