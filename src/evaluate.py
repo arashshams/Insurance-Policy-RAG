@@ -52,7 +52,7 @@ import os
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -100,6 +100,20 @@ page_hit = em.page_hit
 def is_abstention(answer: str, idk: str = rp.IDK_ANSWER) -> bool:
     """Shared abstention definition (delegates to the pipeline's)."""
     return rp.is_abstention(answer, idk)
+
+
+def _relative_label(path: PurePath, root: PurePath) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def index_label_for(index) -> str:
+    """The index's label in cache keys and reports: relative to the repo, with
+    forward slashes on every OS. (Windows paths gave "app\\demo_index", so
+    caches made in CI, "app/demo_index", were never found on Windows.)"""
+    return _relative_label(Path(index).resolve(), REPO_ROOT)
 
 
 def _cache_key(q: dict, index_label: str) -> str:
@@ -600,10 +614,7 @@ def main(argv: list[str] | None = None) -> int:
         index_label = f"pdf:{pdf.name}:{digest}"
     else:
         collection = rp.load_persistent_collection(persist_dir=args.index)
-        try:
-            index_label = str(Path(args.index).resolve().relative_to(REPO_ROOT))
-        except ValueError:
-            index_label = str(Path(args.index).resolve())
+        index_label = index_label_for(args.index)
     n_chunks = collection.count()
     print(f"Index: {index_label} ({n_chunks} chunks)")
     print(f"Eval set: {questions_path} ({es.set_version(qset)}, "

@@ -585,10 +585,7 @@ def main(argv: list[str] | None = None) -> int:
     categories = list(qset.get("categories") or [])
 
     collection = rp.load_persistent_collection(persist_dir=args.index)
-    try:
-        index_label = str(Path(args.index).resolve().relative_to(REPO_ROOT))
-    except ValueError:
-        index_label = str(Path(args.index).resolve())
+    index_label = ev.index_label_for(args.index)
     chunk_texts = {c["id"]: c["text"] for c in es.chunks_from_collection(collection)}
     results_path = Path(args.results) if args.results else ev.results_path_for(questions_path)
     answers = load_json(results_path)

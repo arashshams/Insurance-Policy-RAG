@@ -790,3 +790,10 @@ sections. 2–3 resume bullets, describing only what was built.
   artifact; offline tests updated (170 pass), actionlint clean.
   Recommendation (owner to confirm in the next PR): `gemini-3.6-flash` as
   the main model.
+- **2026-11-23 — Windows cache-key fix.** Run #19 (no API calls) produced
+  the v2.1 report: **57/65 pass**, evidence hit 100%, plus the `eval-data`
+  artifact. Owner's `make judge-sheet` on Windows found 0/65 cached answers:
+  the index label in cache keys was built with `str(path)`, which gives
+  `app\demo_index` on Windows vs `app/demo_index` in CI. Branch
+  `fix-windows-index-label`: one helper with forward slashes on every OS,
+  used by `src/evaluate.py` and `src/judge.py`; 1 offline test (171 pass).
