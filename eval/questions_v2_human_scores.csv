@@ -1,0 +1,21 @@
+id,answer_sha,faithfulness,correctness,notes
+fact_04,9921c0121f5b,2,2,
+para_06,f23fad769383,2,2,
+num_03,7a3b417050e3,2,2,"The requested $2,000 maximum is correct; does not explicitly say all related costs are included."
+multi_06,2e52f16e9629,2,2,Both requested annual amounts are correct; 100% reimbursement and lifetime cap are omitted but not directly asked for.
+span_01,4b36ba22f2d6,2,1,Travel instructions and payment timing are supported; general claim submission channels and prior-authorization documents are missing.
+defer_04,023422b3edee,2,2,
+adv_05,32e97a90b3af,1,1,"Correct 9-month stability rule, but the unqualified exclusion omits exceptions for minor ailments and same-ingredient/strength medication changes; stability criteria also omitted."
+fact_01,cad7f8ea9d89,2,2,Correct coverage and reimbursement basis; optional first-visit referral is omitted but not directly asked for.
+para_05,0d34c0a860e9,2,2,
+num_04,baac8289fa4a,2,2,
+multi_02,09dbb0e9c265,2,2,
+span_05,e1b5ef377bf8,2,1,"Travel coverage and catastrophic benefit are supported, but ordinary at-home paramedical coverage and the one-benefit-year duration are missing."
+defer_03,cdb2627d15b6,2,2,Correctly defers amount to Schedule of Benefits and states standard ward condition; chronic care/private hospital exclusions omitted.
+adv_08,20bf3d520b1a,1,1,"Generic/formulary rule and listed exclusions are supported, but the blanket formulation omits the Quebec RAMQ-list exception. Lowest-cost generic reimbursement basis is missing."
+fact_08,528e3807907a,2,2,
+para_04,24560c70e81e,2,2,
+num_08,7c118f2ba28a,2,2,
+multi_05,780dd838a66c,2,2,All three requested deadlines are correct; prior approval condition is omitted but not directly asked for.
+span_06,c6fae96b5a5d,2,2,
+defer_02,0418c20fca80,2,2,Correctly defers maximum to Schedule of Benefits; ADP-first and prior authorization conditions are omitted but not directly asked for.

@@ -684,7 +684,8 @@ def main(argv: list[str] | None = None) -> int:
             report_path = REPORTS_DIR / f"{version}_{today}.md"
         meta = {
             "date": today,
-            "eval_set": str(questions_path),
+            # relative, forward slashes: no local user paths in committed reports
+            "eval_set": index_label_for(questions_path),
             "eval_set_version": version,
             "n_items": len(records),
             "index": index_label,
