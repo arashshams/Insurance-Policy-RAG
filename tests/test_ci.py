@@ -250,3 +250,8 @@ def test_index_label_uses_forward_slashes_on_windows_too():
     assert ev._relative_label(root / "app" / "demo_index", root) == "app/demo_index"
     assert ev._relative_label(PureWindowsPath(r"D:\idx"), root) == "D:/idx"
     assert ev.index_label_for(ev.DEFAULT_INDEX) == "app/demo_index"
+
+
+def test_report_paths_are_repo_relative():
+    # Committed reports must not carry local paths like C:\Users\<name>\...
+    assert ev.index_label_for(ev.DEFAULT_QUESTIONS) == "eval/questions_v2.json"

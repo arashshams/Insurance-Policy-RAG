@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-11-23 (M1d: first full v2 report committed; evaluating `gemini-3.6-flash` as the generator, judged by `gemma-4-31b-it`; see "Where we are")
+Last updated: 2026-11-24 (M1d done: final v2.1 report with judge-human agreement; next: main-model switch; evaluating `gemini-3.6-flash` as the generator, judged by `gemma-4-31b-it`; see "Where we are")
 
 ---
 
@@ -82,26 +82,24 @@ Last updated: 2026-11-23 (M1d: first full v2 report committed; evaluating `gemin
     started hours late (GitHub delays scheduled jobs), but they finished
     the run. full-eval now also uploads the answer and judge caches
     (`eval-data` artifact) for local hand-scoring.
+- **Judge validation (2026-11-24):** owner hand-scored 20 answers.
+  Faithfulness 18/20 exact, correctness 17/20 exact, none more than one
+  point apart. The judge missed two overgeneralizations (`adv_05`,
+  `adv_08`: rules stated without their exceptions), so the judge's "100%
+  fully faithful" is an upper bound (90% on the human sample; hallucination
+  0% either way). The judge was also stricter on details the question
+  didn't ask for (`multi_05`, `defer_03`). Final report:
+  `eval/reports/v2.1_2026-11-24.md`, 57/65 pass.
 - **Next items:**
-  1. Owner, after merging `m1d-report`: one full-eval run with
-     `gen_model=gemini-3.6-flash`, judge ticked, `max_calls` 0,
-     `judge_max_calls` 0. No API calls; it produces the v2.1 report and
-     the `eval-data` artifact.
-  2. Owner: hand scores. Put `questions_v2_results.json` and
-     `questions_v2_judge.json` from `eval-data` into `eval/`, then
-     `INSURANCE_RAG_GEN_MODEL=gemini-3.6-flash make judge-sheet`. Score
-     about 20 items in `eval/questions_v2_human_scores.csv` (guide:
-     `eval/questions_v2_judge_sheet.md`), then
-     `INSURANCE_RAG_GEN_MODEL=gemini-3.6-flash make eval` (no API calls once
-     every item is cached; needs the key set only for the start-up check).
-     The report then shows judge-human agreement; commit it as the M1d
-     final report.
-  3. PR: `gemini-3.6-flash` becomes the main model (D15 upgrade path;
-     no v2 baseline for 3.8 exists, it was never available long enough).
-     New backup: not `gemini-3.5-flash` (shares 3.6's quota); candidate
+  1. PR: `gemini-3.6-flash` becomes the main model (D15 upgrade path; no
+     v2 baseline for 3.8 exists, it was never available long enough). New
+     backup: not `gemini-3.5-flash` (shares 3.6's quota); candidate
      `gemini-3.1-flash-lite` (own quota, answered in 2 s on 2026-11-09)
-     after one smoke-eval check. README headline numbers; `make deploy`.
-  4. M3 (MLflow tracking + threshold/k sweep, D5, D6) on the cached answers.
+     after one smoke-eval check. README: headline numbers with the judge
+     caveat, link to the report; `make deploy`.
+  2. M3 (MLflow tracking + threshold/k sweep, D5, D6) on the cached answers;
+     then prompt work on over-refusal and a judge prompt v2 (both measured
+     with this set and these hand scores).
 - **Free-tier budget:** 20 generation requests per day per project and
   model (D13). Full v2 answers need ~60, the judge up to ~47 on its own
   model's quota; the CI smoke eval up to ~12 per relevant PR. Runs resume
@@ -339,7 +337,7 @@ point to `master`; `requirements.txt` pinned.
 Acceptance: `make setup test lint` works on Linux/macOS and in CI; README
 "Getting started" mentions the Makefile and the plain commands.
 
-### M1. Evaluation 2.0 (highest priority) — `[~]` (M1a-M1c done; M1d in progress: first full v2 report committed, hand scores next)
+### M1. Evaluation 2.0 (highest priority) — `[x]` (M1a-M1d done; README headline with the model switch PR)
 
 **M1a — eval set v2 (data only).** `[x]` merged as PR #22.
 - [x] `eval/questions_v2.json`: 65 items (42 answer, 5 defer, 18 abstain).
@@ -412,17 +410,20 @@ commits: the feature and a log-wording fix for an existing test).
 - [ ] Owner: `make test lint`, merge; confirm the judge model's free quota;
   run `make judge`, `make judge-sheet`, hand-score, `make eval`.
 
-**M1d — committed report + failure analysis.** `[~]` (branch `m1d-report`)
+**M1d — committed report + failure analysis.** `[x]` (PRs #42, #43, `m1d-final`; README numbers with the model switch)
 - [x] `eval/reports/v2.0_2026-11-22.md` + `.json`: first complete v2 run
   (`gemini-3.6-flash`, judge Gemma), from the full-eval artifact.
 - [x] `eval/reports/v2.0_2026-11-22_analysis.md`: the 10 failures by cause,
   judge notes, implications, limitations.
 - [x] Eval set v2.1: alternative evidence for `para_06`, `num_08`.
 - [x] full-eval: nightly schedule removed; `eval-data` artifact (caches).
-- [ ] v2.1 report (no API calls) + owner's hand scores -> judge-human
-  agreement; commit as the final M1d report.
-- [ ] README links the latest report; headline numbers (with the model
-  switch PR).
+- [x] Final report `eval/reports/v2.1_2026-11-24.md` (+ `.json`): 57/65
+  pass; judge-human agreement on 20 owner-scored items (faithfulness 90%
+  exact, correctness 85% exact, all within one point); hand scores in
+  `eval/questions_v2_human_scores.csv`; findings in the analysis file.
+- [x] Report metadata uses repo-relative paths (no local user paths).
+- [ ] README links the latest report; headline numbers (moved to the
+  main-model switch PR).
 
 Acceptance: one command produces the full report; every number in the
 README traces to a committed report.
@@ -797,3 +798,10 @@ sections. 2–3 resume bullets, describing only what was built.
   `app\demo_index` on Windows vs `app/demo_index` in CI. Branch
   `fix-windows-index-label`: one helper with forward slashes on every OS,
   used by `src/evaluate.py` and `src/judge.py`; 1 offline test (171 pass).
+- **2026-11-24 — M1d done.** Owner hand-scored the 20-item sample and
+  rebuilt the report locally (`make eval`, no API calls): judge-human
+  agreement as above. Branch `m1d-final`: v2.1 report + JSON and the hand
+  scores committed; analysis updated (judge vs human, qualified headline
+  claims); report metadata now uses repo-relative paths (the owner's local
+  path and the CI runner path removed from the committed reports); 1
+  offline test (172 pass).

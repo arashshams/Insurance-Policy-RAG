@@ -1,7 +1,7 @@
 {
   "meta": {
     "date": "2026-11-22",
-    "eval_set": "/home/runner/work/Insurance-Policy-RAG/Insurance-Policy-RAG/eval/questions_v2.json",
+    "eval_set": "eval/questions_v2.json",
     "eval_set_version": "v2.0",
     "n_items": 65,
     "index": "app/demo_index",
