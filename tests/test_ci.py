@@ -255,3 +255,52 @@ def test_index_label_uses_forward_slashes_on_windows_too():
 def test_report_paths_are_repo_relative():
     # Committed reports must not carry local paths like C:\Users\<name>\...
     assert ev.index_label_for(ev.DEFAULT_QUESTIONS) == "eval/questions_v2.json"
+
+
+def test_model_defaults_after_the_switch():
+    # PLAN.md D21. Only meaningful with no env overrides (as in CI).
+    import os
+
+    if any(os.environ.get(v) for v in ("INSURANCE_RAG_GEN_MODEL",
+                                       "INSURANCE_RAG_GEN_FALLBACK_MODEL",
+                                       "INSURANCE_RAG_JUDGE_MODEL")):
+        pytest.skip("model env overrides set")
+    from src import judge as jd
+
+    assert rp.GEN_MODEL == "gemini-3.6-flash"
+    assert rp.GEN_FALLBACK_MODEL not in (rp.GEN_MODEL, "gemini-3.5-flash")  # 3.5 shares 3.6's quota
+    assert jd.JUDGE_MODEL not in (rp.GEN_MODEL, "gemini-3.5-flash")  # D4
+
+
+def test_model_check_lists_but_does_not_flag_models_already_tried():
+    pinned = {"generator": "gemini-3.6-flash", "judge": "gemma-4-31b-it"}
+    r = mc.check(["gemini-3.6-flash", "gemma-4-31b-it", "gemini-3.7-flash",
+                  "gemini-3.8-flash"], pinned)
+    assert r["newer"] == [] and not r["upgrade_available"]  # no weekly issue for these
+    assert r["not_adopted"] == ["gemini-3.8-flash", "gemini-3.7-flash"]
+    assert "already evaluated and not adopted" in mc.render(r, pinned)
+    r = mc.check(["gemini-3.6-flash", "gemma-4-31b-it", "gemini-3.9-flash"], pinned)
+    assert r["newer"] == ["gemini-3.9-flash"] and r["upgrade_available"]
+
+
+def test_known_failures_are_excused_but_never_the_guardrail():
+    def shy(q):
+        return ("I don't know", [], []) if "dental" in q else _answer(q)
+    shy_id = next(f["id"] for f in _summary(shy)["failures"])
+    gates = ev.check_gates(_summary(shy), max_failures=0, known={shy_id})
+    assert all(g["ok"] for g in gates) and "known, excused" in gates[1]["detail"]
+
+    def leaky(q):
+        return ("Paris.", [1], [{"id": "doc_9", "score": 0.3}]) if "France" in q else _answer(q)
+    gates = ev.check_gates(_summary(leaky), known={"out_01"})
+    assert not gates[0]["ok"]  # answering an out-of-scope question is never excused
+
+
+def test_known_failure_list_for_the_main_model_is_valid():
+    known = ev.known_failures_for("gemini-3.6-flash")
+    ids = {i["id"] for i in es.items_of(es.load_eval_set(ev.V2_QUESTIONS))}
+    assert known and known <= ids
+    report = (REPO_ROOT / "eval" / "reports" / "v2.1_2026-11-24.json").read_text(encoding="utf-8")
+    import json
+    assert known <= set(json.loads(report)["failed_ids"])  # only failures the report shows
+    assert ev.known_failures_for("some-other-model") == set()
