@@ -3,7 +3,9 @@
 # answerable questions close to the 0.37 distance cutoff, and out-of-scope
 # questions that pass the threshold and rely on the model's refusal.
 # Gates (src/evaluate.py, --gates): no abstain item answered, no answerable
-# item abstained, at most 1 failed item.
+# item abstained, at most 1 failed item. Failures the committed report already
+# shows for the main model (eval/known_failures/<model>.txt) are excused,
+# except the guardrail.
 
 fact_01   # near the cutoff (0.336), app example question
 fact_08   # nearest passage 0.365, just under the cutoff

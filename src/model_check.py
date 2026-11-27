@@ -61,6 +61,14 @@ def list_models(api_key: str, timeout: float = 30.0) -> list[str]:
             return sorted(set(names))
 
 
+# Newer Flash versions already evaluated and not adopted (PLAN.md D21): listed
+# in the report, but they don't open a "newer model" issue every week.
+NOT_ADOPTED = {
+    "gemini-3.8-flash": "unavailable for weeks in Nov 2026 (503 overloads, no reply)",
+    "gemini-3.7-flash": "no reply within 60 s in Nov 2026",
+}
+
+
 def check(available: list[str], pinned: dict[str, str]) -> dict:
     """Compare the available models with the pinned ones.
 
@@ -69,11 +77,13 @@ def check(available: list[str], pinned: dict[str, str]) -> dict:
     avail = set(available)
     missing = {role: model for role, model in pinned.items() if model not in avail}
     current = flash_version(pinned.get("generator", ""))
-    newer = [] if current is None else sorted(
+    newer_all = [] if current is None else sorted(
         (n for n in avail if (flash_version(n) or ()) > current),
         key=flash_version, reverse=True)
+    newer = [n for n in newer_all if n not in NOT_ADOPTED]
     return {"missing": missing, "newer": newer, "action_needed": bool(missing),
-            "upgrade_available": bool(newer)}
+            "upgrade_available": bool(newer),
+            "not_adopted": [n for n in newer_all if n in NOT_ADOPTED]}
 
 
 def render(result: dict, pinned: dict[str, str]) -> str:
@@ -92,6 +102,11 @@ def render(result: dict, pinned: dict[str, str]) -> str:
         lines += ["**Upgrade candidates** (newer Flash versions than the generator): "
                   + ", ".join(f"`{n}`" for n in result["newer"]) + ". Worth evaluating; "
                   "nothing changes until the default is bumped.", ""]
+    if result.get("not_adopted"):
+        lines += ["Newer, but already evaluated and not adopted (PLAN.md D21): "
+                  + "; ".join(f"`{n}`: {NOT_ADOPTED[n]}" for n in result["not_adopted"])
+                  + ". Remove a model from `NOT_ADOPTED` in `src/model_check.py` to "
+                  "flag it again.", ""]
     if not result["missing"] and not result["newer"]:
         lines += ["Nothing to do: the pinned models are available and no newer Flash "
                   "version is listed.", ""]

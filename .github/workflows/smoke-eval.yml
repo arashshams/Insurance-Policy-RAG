@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       gen_model:
-        description: "Generator to evaluate instead of the pinned one (e.g. the fallback model gemini-3.6-flash)"
+        description: "Generator to evaluate instead of the pinned one (e.g. the fallback model gemini-3.1-flash-lite)"
         required: false
         default: ""
 

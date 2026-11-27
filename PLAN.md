@@ -9,7 +9,7 @@ or agent can pick up the work without the conversation that produced it.
 **Keep it current.** Every PR that advances the plan must also update the
 status checkboxes and append to the [Progress log](#9-progress-log).
 
-Last updated: 2026-11-24 (M1d done: final v2.1 report with judge-human agreement; next: main-model switch; evaluating `gemini-3.6-flash` as the generator, judged by `gemma-4-31b-it`; see "Where we are")
+Last updated: 2026-11-24 (M1 done; main model switched to `gemini-3.6-flash` on branch `main-model-3.6`, D21; evaluating `gemini-3.6-flash` as the generator, judged by `gemma-4-31b-it`; see "Where we are")
 
 ---
 
@@ -90,14 +90,20 @@ Last updated: 2026-11-24 (M1d done: final v2.1 report with judge-human agreement
   0% either way). The judge was also stricter on details the question
   didn't ask for (`multi_05`, `defer_03`). Final report:
   `eval/reports/v2.1_2026-11-24.md`, 57/65 pass.
+- **Main-model switch (D21), branch `main-model-3.6`:** generator
+  `gemini-3.6-flash`, backup `gemini-3.1-flash-lite`, judge Gemma; README
+  Results section from the committed report (with the judge caveat);
+  known-failure list for the smoke gates; model check stops flagging 3.7/3.8.
 - **Next items:**
-  1. PR: `gemini-3.6-flash` becomes the main model (D15 upgrade path; no
-     v2 baseline for 3.8 exists, it was never available long enough). New
-     backup: not `gemini-3.5-flash` (shares 3.6's quota); candidate
-     `gemini-3.1-flash-lite` (own quota, answered in 2 s on 2026-11-09)
-     after one smoke-eval check. README: headline numbers with the judge
-     caveat, link to the report; `make deploy`.
-  2. M3 (MLflow tracking + threshold/k sweep, D5, D6) on the cached answers;
+  1. Owner: re-run smoke-eval with `gen_model=gemini-3.1-flash-lite` at a
+     quiet hour (first try hit an overload). Pass = guardrail gate passes
+     (no out-of-scope question answered); some over-refusal is acceptable
+     for a backup. If it fails the guardrail: set the backup to "" (no
+     backup) instead.
+  2. Owner: merge `main-model-3.6`, `make deploy`; check `/health`
+     (`model_default: gemini-3.6-flash`, `model_fallback:
+     gemini-3.1-flash-lite`) and one question; reboot the Streamlit app.
+  3. M3 (MLflow tracking + threshold/k sweep, D5, D6) on the cached answers;
      then prompt work on over-refusal and a judge prompt v2 (both measured
      with this set and these hand scores).
 - **Free-tier budget:** 20 generation requests per day per project and
@@ -287,6 +293,7 @@ Shipped demo index, `gemini-flash-latest`, eval set v1 (12 in + 6 out):
 | D4 | LLM judge uses a **pinned** model version, different from the generator: default `gemini-3.6-flash` (`INSURANCE_RAG_JUDGE_MODEL`). | `-latest` aliases make judge scores drift; a different model reduces self-grading bias; on the free tier each model has its own daily quota, so judging doesn't use the generator's. Still a Gemini judge of Gemini answers: agreement with the owner's hand scores is reported. A judge from another provider is a possible later upgrade. | Decided (owner, 2026-10-28) **Enforced since 2026-11-09:** `src/judge.py` and the full-eval workflow stop if the judge is the generator. **Judge changed to `gemma-4-31b-it` (2026-11-09):** an open model from a different family than the Gemini generator, with its own free quota; `gemini-3.5-flash` was rejected because Google counts its requests against `gemini-3.6-flash`'s quota (so it may be the same model underneath), `gemini-3.7-flash` did not respond, `gemini-3.1-pro-preview` has no free quota. Gemma rejects `reasoning_effort` (HTTP 400) and writes `<thought>...</thought>` before its JSON, so the judge skips that setting for Gemma, strips the thinking, allows 2,048 output tokens and a 180 s timeout. Lesson: a different model *name* is not enough; check which quota (and so which model) the 429 names. |
 | D16 | **Pipeline fingerprint in cached answers:** each answer records a hash of the prompts, generation budget, reasoning setting, chunking and IDK string (`rag_pipeline.pipeline_fingerprint()`); a cached answer is reused only if it matches. Answers cached before this change (no fingerprint) adopt the current one once. | The cache key covered question/index/model/threshold/k but not the prompt, so editing the prompt silently reused old answers in reports and would hide regressions in CI. Adoption keeps the owner's in-progress v2 run (nothing changed since those answers). | Decided (owner, 2026-10-29) |
 | D17 | **CI evaluation design:** smoke eval of 12 items (`eval/smoke_v2.txt`, every category, edge cases of the guardrail) runs automatically on PRs touching `src/`, `eval/`, `app/demo_index/` or `requirements.txt`, always with fresh answers and `--max-calls 15`; gates: no abstain item answered, no answerable item abstained, at most 1 failed item; no judge in CI. Skips (not fails) without the secret (forks) or on a quota stop. Full eval is manual only, resumable through the GitHub cache. Model check weekly. | Catches regressions where the PR changes behaviour while keeping quota use small; strict on the guardrail, tolerant of one off answer; quota or forks never block a PR. A scheduled full eval would only re-measure the pinned, unchanged system. | Decided (owner, 2026-10-29) |
+| D21 | **Main model switched to `gemini-3.6-flash`** (D15 upgrade path); serving backup `gemini-3.1-flash-lite`; judge stays `gemma-4-31b-it`. Smoke gates excuse the main model's known failures (`eval/known_failures/<model>.txt`, ids from the committed report), never the guardrail. The weekly model check lists `gemini-3.7-flash` / `gemini-3.8-flash` as tried and not adopted instead of flagging them as upgrades. | `gemini-3.8-flash` was unavailable for weeks (503 overloads, no reply; 0/65 in full-eval), so no v2 baseline for it exists and the live demo ran on the backup anyway. `gemini-3.6-flash` has a complete committed report: 57/65, hallucination 0%, guardrail 17/18; weakness: over-refusal (7 wrongful "I don't know"). The backup needs its own free quota (3.5 shares 3.6's). Without the known-failure list every pipeline PR's smoke eval would fail on `defer_01` and `adv_02`, which hides new failures. Cost: the main model is not the newest Flash; the backup is smaller and only smoke-checked. | Decided (owner, 2026-11-24). Backup smoke check pending: first try (2026-11-24) hit an overload, 0/12 answered. |
 | D20 | **Monitoring design:** one metrics record per API question in the project's (default) **Firestore** database (Native, us-central1, free tier: 1 GiB, 20k writes / 50k reads per day), with a fixed field whitelist (no question, answer, passages or IP); structured JSON log lines with the same fields for Cloud Logging (50 GiB/month free, 30-day retention); a public **Monitoring** page in the app showing aggregates only (from `GET /stats`, token-protected, cached 5 min); 90-day retention via the API's own deletes (Firestore TTL deletes are billed); upload mode records nothing. | Cloud Run instances lose local state, so metrics need an external store; Firestore is in the same project, free at demo scale and needs no extra keys on Cloud Run. Aggregates-only on a public page keeps it a portfolio feature without exposing anyone's questions. | Decided (owner, 2026-11-04) |
 | D19 | **Serving fallback model:** the API and the Streamlit app pass `fallback_model=GEN_FALLBACK_MODEL` (`gemini-3.6-flash`, env `INSURANCE_RAG_GEN_FALLBACK_MODEL`, "" disables). The main model gets one attempt; if Gemini is unavailable for it (503 overload, rate limit, daily quota) the fallback answers. Every answer reports `model_used` / `fallback_used` (API fields `model`, `fallback_used`; log line `model=... fallback=... reason=...`; app caption). The evaluation and judge never fall back (they measure the pinned generator); smoke-eval has a `gen_model` input to check the fallback against the gates; the weekly model check watches it. App timeout 90 s (two attempts) inside Cloud Run's 120 s. | `gemini-3.8-flash` returned 503 "high demand" on two consecutive days, so the demo was down while the deployment itself was fine. A documented, visible exception to strict pinning (D15) keeps the demo answering; per-model free-tier quotas mean the fallback also covers the main model's daily limit. Cost: some answers come from a model not evaluated as the generator, hence the smoke-eval check and the labels. | Decided (owner, 2026-11-03). **Fallback check (smoke subset, 2026-11-03):** `gemini-3.6-flash` passed 10/12; guardrail 100% (no out-of-scope question answered), evidence hit 100%, but it said "I don't know" on `defer_01` (should point to the Schedule of Benefits) and `adv_02` (injection plus an answerable cosmetic-surgery question), so the "no wrongful abstention" gate failed. Its failure mode is over-refusal, the safe direction, and it only answers while the main model is unavailable: owner kept the fallback. One run only; re-run to see if the misses repeat. **Latency follow-up (2026-11-04):** overloaded `gemini-3.8-flash` took 16-20 s to answer 503 or timed out at 20 s, so every backup answer took ~20 s; the main model's single attempt now gets 8 s when a backup exists (`INSURANCE_RAG_PRIMARY_TIMEOUT`; a healthy main model answers in ~5 s). |
 | D18 | **Deploy the API to Google Cloud Run** (`us-central1`), from source with one command from the owner's machine (`make deploy`, Cloud Build builds the `Dockerfile`): min 0 / max 1 instance, 1 GiB, Gemini key and API token from Secret Manager, public URL with the app's bearer token required for `/ask`. Slim image from `requirements-api.txt` (same pins as `requirements.txt`, test-enforced), non-root, index opened at startup. CI builds and starts the image with no key on relevant PRs. Deploy from GitHub Actions (Workload Identity Federation) deferred. | Checked free tiers (2026-11-02): Cloud Run's free tier (2M requests/month + CPU/memory time, request-based billing, nothing charged while idle) fits a demo and runs the same container; Render's free tier sleeps after 15 min (~1 min wake), has 512 MB and may suspend services that call external APIs heavily; Fly.io has no free tier for new accounts; Hugging Face Docker Spaces terms for free accounts were unclear. Cost: a billing account is required; image storage above Artifact Registry's free 0.5 GB costs cents. | Decided (owner, 2026-11-02) |
@@ -805,3 +812,10 @@ sections. 2–3 resume bullets, describing only what was built.
   claims); report metadata now uses repo-relative paths (the owner's local
   path and the CI runner path removed from the committed reports); 1
   offline test (172 pass).
+- **2026-11-24 — main-model switch prepared (D21).** Smoke check of the
+  backup candidate `gemini-3.1-flash-lite` (smoke-eval #13): overloaded,
+  0/12 answered, to retry. Branch `main-model-3.6`: defaults
+  (`gemini-3.6-flash`, backup `gemini-3.1-flash-lite`), README Results from
+  the v2.1 report, DEPLOY.md, model check `NOT_ADOPTED` (3.7, 3.8), smoke
+  gates excuse `eval/known_failures/gemini-3.6-flash.txt` (never the
+  guardrail); 5 offline tests (176 pass).

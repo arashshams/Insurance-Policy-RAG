@@ -54,7 +54,9 @@ EMBED_MODEL = os.environ.get("INSURANCE_RAG_EMBED_MODEL", "gemini-embedding-001"
 # switch models silently. To upgrade: run the evaluation with
 # INSURANCE_RAG_GEN_MODEL set to the new model, compare the reports, then
 # change this default (README, "Upgrading the model").
-GEN_MODEL = os.environ.get("INSURANCE_RAG_GEN_MODEL", "gemini-3.8-flash")
+# 2026-11: gemini-3.8-flash -> gemini-3.6-flash (PLAN.md D21): 3.8 was
+# unavailable for weeks; 3.6 is the model the committed v2 report measures.
+GEN_MODEL = os.environ.get("INSURANCE_RAG_GEN_MODEL", "gemini-3.6-flash")
 
 
 # Fallback model for serving (PLAN.md D19): when the generator is overloaded
@@ -62,7 +64,9 @@ GEN_MODEL = os.environ.get("INSURANCE_RAG_GEN_MODEL", "gemini-3.8-flash")
 # the app ask this model instead, so the demo keeps answering. Pinned too, and
 # reported with every answer ("model_used", "fallback_used"). The evaluation
 # never falls back: it measures GEN_MODEL only. Set to "" to disable.
-GEN_FALLBACK_MODEL = os.environ.get("INSURANCE_RAG_GEN_FALLBACK_MODEL", "gemini-3.6-flash")
+# It must have its own free-tier quota: gemini-3.5-flash requests count against
+# gemini-3.6-flash's quota, so it can't back up 3.6 (PLAN.md D4, D21).
+GEN_FALLBACK_MODEL = os.environ.get("INSURANCE_RAG_GEN_FALLBACK_MODEL", "gemini-3.1-flash-lite")
 
 # With a fallback, how long (seconds) the single attempt on the main model may
 # take before the fallback answers instead. Unset = the normal per-request

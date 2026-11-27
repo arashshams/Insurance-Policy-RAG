@@ -52,7 +52,7 @@ The whole pipeline is consolidated into a single importable module, **`src/rag_p
 | Setting | Value |
 |---|---|
 | Embedding model | `gemini-embedding-001` (3072-dim) |
-| Generation model | `gemini-3.8-flash`, pinned (temperature 0.0); serving fallback `gemini-3.6-flash` when it is unavailable |
+| Generation model | `gemini-3.6-flash`, pinned (temperature 0.0); serving fallback `gemini-3.1-flash-lite` when it is unavailable |
 | Vector store | ChromaDB, cosine space, collection `insurance_policy_cvdb` |
 | Chunking | `cl100k_base` tokenizer, size 800, overlap 128 |
 | Retrieval `k` | 4 (`K_DEFAULT`) |
@@ -172,7 +172,7 @@ Calibration and the numbers below were produced against a published, SAMPLE-wate
 
 ## Evaluation (the quality story)
 
-The pipeline is validated end-to-end on the free tier using an evaluation harness (`src/evaluate.py`, with `04_evaluation.ipynb` as a notebook runner). It runs **eval set v2** (`eval/questions_v2.json`): 65 questions in 9 categories, each with an expected behaviour: *answer* it from the policy, *defer* (say the amount is in the Schedule of Benefits, which isn't part of the policy), or *abstain* ("I don't know"). Answerable items carry the pages that may hold the answer and short evidence phrases quoted from the policy. All metrics are deterministic (no LLM judge yet):
+The pipeline is validated end-to-end on the free tier using an evaluation harness (`src/evaluate.py`, with `04_evaluation.ipynb` as a notebook runner). It runs **eval set v2** (`eval/questions_v2.json`): 65 questions in 9 categories, each with an expected behaviour: *answer* it from the policy, *defer* (say the amount is in the Schedule of Benefits, which isn't part of the policy), or *abstain* ("I don't know"). Answerable items carry the pages that may hold the answer and short evidence phrases quoted from the policy. The checks below are deterministic; an LLM judge and a hand-scored sample cover answer content:
 
 - **Guardrail:** abstention precision and recall ("should abstain" is the positive class), judged with the same `is_abstention` rule the app and API use, and whether each abstention came from the distance threshold or the model's refusal.
 - **Retrieval:** hit rate (anything passed the threshold), page hit@k (a passage on an expected page was retrieved) and recall@k (share of the item's evidence phrases inside the retrieved passages, before and after the threshold).
@@ -183,31 +183,38 @@ An item passes when it shows the right behaviour and, if it should be answered, 
 
 **LLM judge.** The checks above can't tell whether an answer's content is right. For that, a second, pinned model (`gemma-4-31b-it` by default: Google's open Gemma model, a different family from the Gemini generator) reads each answered question with the passages the system saw and the reference answer, and scores *faithfulness* (every claim supported by the passages) and *correctness* (matches the reference answer) from 0 to 2, using the rubric in `eval/prompts/judge_v1.md`. `make judge` judges the cached answers (resumable, budgeted with `ARGS="--max-calls N"`), and the next `make eval` adds a judge section to the report: share of fully correct and fully faithful answers, hallucination rate, and a strict pass rate. To check the judge itself, `make judge-sheet` writes a sample of about 20 answers to score by hand (`eval/questions_v2_judge_sheet.md` and `eval/questions_v2_human_scores.csv`); the report then shows how often the judge agrees with the human scores (exact, within one point, and weighted kappa).
 
-The results below are from eval set v1 (18 questions); v2 results will replace them once a committed v2 report exists.
+The generator model is pinned, so cached answers stay valid until the question, index, model or threshold changes; if you point `INSURANCE_RAG_GEN_MODEL` at a moving `-latest` alias instead, cached answers expire after 14 days (`--max-age-days`), since the endpoint doesn't report which version served a request. Scoring is re-applied to cached answers on every run, so editing a question's expected pages or evidence doesn't need new API calls.
 
-The generator model is pinned, so cached answers stay valid until the question, index, model or threshold changes; if you point `INSURANCE_RAG_GEN_MODEL` at a moving `-latest` alias instead, cached answers expire after 14 days (`--max-age-days`), since the endpoint doesn't report which version served a request. Scoring is re-applied to cached answers on every run, so editing a question's expected keywords or pages doesn't need new API calls.
+### Results
 
-Latest run (October 2026, shipped 38-chunk demo index, `gemini-flash-latest`, 12 in-scope + 6 out-of-scope questions):
+From the committed report [`eval/reports/v2.1_2026-11-24.md`](eval/reports/v2.1_2026-11-24.md), with the [failure analysis](eval/reports/v2.0_2026-11-22_analysis.md):
+
+- **Run:** eval set v2.1, 65 questions, generator `gemini-3.6-flash`, judge `gemma-4-31b-it`, shipped 38-chunk demo index, November 2026.
+- **Hand check:** 20 answers were scored by hand to check the judge.
 
 | Metric | Result |
 |---|---|
-| Out-of-scope abstention rate | **100%** (6 / 6) |
-| In-scope retrieval hit rate | **100%** |
-| In-scope questions answered | **12 / 12** |
-| In-scope citation page rate | **100%** (every answer cited a passage on an expected page) |
-| In-scope answer-keyword rate | **92%** (11 / 12; see below) |
-| Closest-passage distance, in-scope max / out-of-scope min | 0.344 / 0.335 |
+| Items passed (right behaviour, cited the evidence) | **57 / 65** (88%) |
+| Hallucination rate (an answer stating something the passages don't support, judge score 0) | **0%** |
+| Answers fully faithful to the passages | **90–100%**: 100% by the judge on all 40 answers, 90% on the 20 hand-scored ones |
+| Answers fully correct (judge) | **82%** (33 / 40); the rest partly correct, none wrong |
+| Out-of-scope questions refused | 17 / 18; the 18th ("approve my claim") was refused in other words |
+| Answers citing a passage on an expected page | 100% |
+| Judge vs human (20 items) | 90% / 85% exact agreement on faithfulness / correctness, all within one point |
 
-The one keyword miss (`in_07`) was a correct answer: it gave the $5 million per-incident travel limit from page 17 but didn't use the words "outside" and "age" that the old keyword list required. The keywords now check for that limit instead. Two in-scope questions sit fairly close to the 0.37 cutoff (`in_01` at 0.336, `in_06` at 0.344), so rewording them could tip them into "I don't know".
+**The main weakness is over-caution.** 7 answerable questions got "I don't know", for two reasons:
 
-**How "I don't know" actually happens.** The guardrail has two layers, and this run shows both are needed:
+- **The distance threshold, 3 questions:** reworded or multi-section questions whose closest passage was just past 0.37 (0.370–0.388).
+- **The model itself, 4 questions:** it refused although the right passages were retrieved, mostly questions comparing two sections or carrying a false or manipulative premise.
 
-1. **Distance threshold (0.37).** If no passage is close enough, the system says "I don't know" without calling the LLM. This stopped the four clearly unrelated questions (closest passages 0.397–0.503).
-2. **The model's refusal.** The prompt tells Gemini to answer only from the passages it is given. The two near-miss questions (pet vet bills at 0.335; a Manulife mortgage question at 0.366) got past the threshold, but Gemini found no answer in the passages and said "I don't know".
+None of the system's errors was a wrong or made-up answer. The judge turned out to be lenient on one kind of unfaithfulness: it missed two answers that state a rule without the policy's exceptions. That is why "fully faithful" is given as a range.
 
-No single threshold separates this question set: the pet question's closest passage (0.335) is nearer than four real questions' (up to 0.344). Lowering the cutoff enough to block it would reject real questions, so 0.37 stays, and the model's refusal is what handles questions that sound related but aren't covered. The evaluation summary reports how each out-of-scope question was stopped.
+**How "I don't know" actually happens.** The guardrail has two layers, and the results show both are needed:
 
-An earlier calibration run (37-chunk Colab index, the original 8 in-scope and 4 out-of-scope questions) answered 7 of 8 in-scope questions. The non-answer was correct by design: that question (`in_02`) then asked for a figure that lives in a separate Schedule of Benefits, not in this policy, and has since been reworded. With 18 questions on one sample policy, all of these figures are a small sample.
+1. **Distance threshold (0.37).** If no passage is close enough, the system says "I don't know" without calling the LLM. This stopped 11 of the 17 correctly refused questions, including all six clearly unrelated ones (closest passages 0.485–0.532).
+2. **The model's refusal.** The prompt tells Gemini to answer only from the passages it is given. It stopped the other 6: questions that got past the threshold but aren't covered by this policy (five insurance-sounding near-misses and one adversarial request).
+
+No single threshold separates the two groups. Out-of-scope questions come as close as 0.316, and answerable ones reach 0.388. Lowering the cutoff enough to block every out-of-scope question would reject many real ones, so the model's refusal handles what the threshold can't. Tuning this trade-off (threshold and k) is the next planned step. Earlier results on the 18-question v1 set are in the git history; v1 stays runnable with `make eval-v1`.
 
 The harness evaluates the exact code and index the live app ships. To reproduce or refresh the numbers on the shipped 38-chunk demo index:
 
@@ -235,7 +242,7 @@ To enable the model-based checks, add a Gemini API key as the repository secret 
 
 ### Upgrading the model
 
-The generator model is pinned (`gemini-3.8-flash`) rather than a `-latest` alias, because every number above describes one specific model, and the guardrail's second layer (the model refusing near-miss questions) depends on its behaviour. Upgrades are deliberate:
+The generator model is pinned (`gemini-3.6-flash` since November 2026; before that `gemini-3.8-flash`, which was unavailable for weeks, see PLAN.md D21) rather than a `-latest` alias, because every number above describes one specific model, and the guardrail's second layer (the model refusing near-miss questions) depends on its behaviour. Upgrades are deliberate:
 
 1. Try the new model without changing code: `export INSURANCE_RAG_GEN_MODEL="<new model>"`, then `make eval` and `make judge` (the model name is part of the cache key, so its answers are cached separately).
 2. Compare its report with the current one, starting with the near-miss "I don't know" questions, then pass rate, hallucination rate and correctness.
@@ -263,7 +270,7 @@ visitor -> Streamlit app (Streamlit Community Cloud)
 
 - **Container:** `Dockerfile` (Python 3.11 slim, non-root user, only `src/`, `api/` and the demo index; dependencies from `requirements-api.txt`). The index is opened at startup; `/health` reports whether it loaded. Secrets come from the environment, never the image.
 - **Cloud Run settings:** scales to zero when idle and to at most one instance, 1 GiB memory; the Gemini key and the API token come from Secret Manager. At demo traffic this stays within Cloud Run's free tier.
-- **Backup model:** when `gemini-3.8-flash` is overloaded, rate-limited or out of daily quota, the API and the app answer with `gemini-3.6-flash` instead, and say so (`"fallback_used": true` in the API reply, a note under the answer in the app). The evaluation always measures the main model; the backup is checked with the smoke eval (`gen_model` input) and watched by the weekly model check.
+- **Backup model:** when `gemini-3.6-flash` is overloaded, rate-limited or out of daily quota, the API and the app answer with `gemini-3.1-flash-lite` instead (a smaller model with its own free-tier quota), and say so (`"fallback_used": true` in the API reply, a note under the answer in the app). The evaluation always measures the main model; the backup is checked with the smoke eval (`gen_model` input) and watched by the weekly model check.
 - **CI:** the `docker` workflow builds the image and starts it without a key on every relevant PR, checking `/health` and that `/ask` fails cleanly, so a broken image never reaches a deploy.
 - **Uploads stay in the app** (decision D3): the deployed API serves only the bundled demo policy, because uploaded documents are private and per-session, and cloud instances come and go.
 
@@ -297,7 +304,7 @@ Records live in the project's Firestore database (free tier) and are deleted aft
 
 **Shipped:** the Streamlit MVP (bundled-policy demo plus a user-upload mode with a per-session, ephemeral index) is live at the [demo link above](https://insurance-policy-rag.streamlit.app/), and a FastAPI backend exposing `POST /ask` over the same pipeline (`api/`) is packaged as a container for Google Cloud Run (see [Deployment](#deployment)), with an evaluation harness, an LLM judge and CI quality gates around it.
 
-**Possible next steps:** multi-document support (policy + amendments) and query logging / metrics.
+**Next steps:** experiment tracking with a threshold/k sweep (MLflow), prompt work on over-refusal measured with eval set v2, a stricter judge prompt checked against the hand scores, and multi-document support (policy + amendments).
 
 ## Contributions
 

@@ -128,7 +128,8 @@ curl "$URL/health"
 ```
 
 Expect `"status": "ok"`, `"index_loaded": true`, `"api_key_present": true`,
-`"auth_required": true`, `"model_fallback": "gemini-3.6-flash"`. Then one
+`"auth_required": true`, `"model_default": "gemini-3.6-flash"`,
+`"model_fallback": "gemini-3.1-flash-lite"`. Then one
 real question (1-2 Gemini calls):
 
 ```bash
@@ -227,9 +228,9 @@ off: `gcloud run services update insurance-rag-api --region us-central1
   anything else using that key. It resets at midnight Pacific; the message
   says when.
 - **An answer says `"fallback_used": true`:** the main model
-  (`gemini-3.8-flash`) was unavailable (overloaded, rate-limited or out of
-  daily quota) and the backup model (`gemini-3.6-flash`) answered (PLAN.md
-  D19). The app labels these answers. Disable with
+  (`gemini-3.6-flash`) was unavailable (overloaded, rate-limited or out of
+  daily quota) and the backup model (`gemini-3.1-flash-lite`) answered
+  (PLAN.md D19, D21). The app labels these answers. Disable with
   `INSURANCE_RAG_GEN_FALLBACK_MODEL=""` (`--update-env-vars` on deploy).
 - **`/ask` returns 503 "temporarily unavailable":** neither model answered
   (the container gives each call 20 s and one retry, so this comes back in

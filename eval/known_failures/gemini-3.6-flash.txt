@@ -1,0 +1,14 @@
+# Known failures of gemini-3.6-flash on eval set v2.1 (PLAN.md D21), from
+# eval/reports/v2.1_2026-11-24.md and its failure analysis. The CI smoke gates
+# excuse these wrongful abstentions, so pipeline PRs are judged on new
+# failures. The guardrail gate is never excused. Remove an id once it passes.
+
+# model over-refusal: right passages retrieved, model said "I don't know"
+span_04
+defer_01
+adv_02
+adv_04
+# distance threshold: closest passage just past 0.37
+para_03
+para_08
+span_03

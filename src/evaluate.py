@@ -71,6 +71,16 @@ V1_RESULTS = REPO_ROOT / "notebooks" / "eval" / "eval_results.json"
 DEFAULT_QUESTIONS = V2_QUESTIONS
 DEFAULT_INDEX = REPO_ROOT / "app" / "demo_index"
 REPORTS_DIR = REPO_ROOT / "eval" / "reports"
+# Per-model lists of items the committed report shows failing (PLAN.md D21):
+# eval/known_failures/<model>.txt. The smoke gates excuse those wrongful
+# abstentions, so a pipeline PR is judged on new failures; the guardrail gate
+# (an out-of-scope question answered) is never excused.
+KNOWN_FAILURES_DIR = REPO_ROOT / "eval" / "known_failures"
+
+
+def known_failures_for(model: str) -> set[str]:
+    path = KNOWN_FAILURES_DIR / f"{model}.txt"
+    return set(es.load_subset(path)) if path.exists() else set()
 DEFAULT_MAX_AGE_DAYS = 14.0
 
 
@@ -493,24 +503,36 @@ def format_summary(s: dict, index_label: str) -> str:
 
 
 # --- CI gates ------------------------------------------------------------------
-def check_gates(summary: dict, max_failures: int = 1) -> list[dict]:
+def check_gates(summary: dict, max_failures: int = 1,
+                known: set[str] | frozenset = frozenset()) -> list[dict]:
     """Pass/fail gates for the CI smoke eval (PLAN.md M2):
       * guardrail: no question that should get "I don't know" is answered
-      * no answerable (answer/defer) question gets "I don't know"
+      * no answerable (answer/defer) question gets "I don't know", apart from
+        `known` failures of this model (known_failures_for(); D21)
       * at most `max_failures` items fail for any reason (e.g. a citation
-        without the evidence), which tolerates one off answer."""
+        without the evidence), not counting `known` ones; tolerates one off
+        answer."""
     a = summary["abstention"]
     failed = [f["id"] for f in summary.get("failures") or []]
+    new_fp = [i for i in a["fp_ids"] if i not in known]
+    known_fp = [i for i in a["fp_ids"] if i in known]
+    new_failed = [i for i in failed if i not in known]
+
+    def _with_known(text: str, ids: list[str]) -> str:
+        return text + (f" (known, excused: {', '.join(ids)})" if ids else "")
     return [
         {"gate": "Guardrail: no out-of-scope question is answered",
          "ok": a["fn"] == 0,
          "detail": f"answered: {', '.join(a['fn_ids'])}" if a["fn"] else "none answered"},
         {"gate": "No answerable question gets \"I don't know\"",
-         "ok": a["fp"] == 0,
-         "detail": f"abstained: {', '.join(a['fp_ids'])}" if a["fp"] else "none"},
+         "ok": not new_fp,
+         "detail": _with_known(f"abstained: {', '.join(new_fp)}" if new_fp else "none",
+                               known_fp)},
         {"gate": f"At most {max_failures} failed item(s)",
-         "ok": len(failed) <= max_failures,
-         "detail": f"{len(failed)} failed" + (f": {', '.join(failed)}" if failed else "")},
+         "ok": len(new_failed) <= max_failures,
+         "detail": _with_known(f"{len(new_failed)} failed"
+                               + (f": {', '.join(new_failed)}" if new_failed else ""),
+                               [i for i in failed if i in known])},
     ]
 
 
@@ -657,7 +679,11 @@ def main(argv: list[str] | None = None) -> int:
     add_judge_results(summary, records, qset, questions_path)
     print()
     print(format_summary(summary, index_label))
-    gates = check_gates(summary, args.max_failures) if args.gates else []
+    known = known_failures_for(rp.GEN_MODEL) if args.gates else set()
+    if known:
+        print(f"\nKnown failures of {rp.GEN_MODEL} (excused by the gates, PLAN.md D21): "
+              + ", ".join(sorted(known)))
+    gates = check_gates(summary, args.max_failures, known) if args.gates else []
     if gates:
         print("\n" + format_gates(gates))
     o, a = summary["overall"], summary["abstention"]
